@@ -33,7 +33,24 @@ from app.services.auth_local import hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-COOKIE_OPTS = dict(httponly=True, samesite="lax", secure=not settings.is_dev)
+# ── cookies ───────────────────────────────────────────────────────────────────
+#
+# "Secure" needs to follow the actual connection scheme, not just settings.is_dev:
+# both nginx/dev.conf and prod.conf always terminate real TLS and forward
+# X-Forwarded-Proto, so a "dev" deployment behind nginx is still genuinely
+# HTTPS end-to-end — only a bare, unproxied `uvicorn` run (no nginx in front)
+# is actually plain HTTP. Deriving it per-request instead of from a static
+# flag gets both cases right automatically.
+
+def _is_secure(request: Request) -> bool:
+    if request.headers.get("x-forwarded-proto", "").lower() == "https":
+        return True
+    return request.url.scheme == "https"
+
+
+def _cookie_opts(request: Request) -> dict:
+    return dict(httponly=True, samesite="lax", secure=_is_secure(request))
+
 
 # access_token/refresh_token also have to work when Nextdesk is loaded inside
 # the Nextcloud embed iframe (nextcloud-app/nextdesk) — a third-party context
@@ -42,15 +59,13 @@ COOKIE_OPTS = dict(httponly=True, samesite="lax", secure=not settings.is_dev)
 # own fetch/XHR calls, so every request from inside the embed would look
 # logged-out regardless of how the session was established (OIDC or local).
 # SameSite=None opts back in, but browsers require Secure to go with it, so
-# this only takes effect outside dev — plain HTTP dev doesn't support iframe
-# embedding anyway. See "Third-party cookie caveat" in docs/nextcloud-app.md
-# for the residual browsers (Safari ITP, hardened Firefox/Chrome) this still
-# doesn't cover.
-SESSION_COOKIE_OPTS = dict(
-    httponly=True,
-    samesite="lax" if settings.is_dev else "none",
-    secure=not settings.is_dev,
-)
+# this only applies when the request actually arrived over HTTPS — plain
+# HTTP doesn't support iframe embedding anyway. See "Third-party cookie
+# caveat" in docs/nextcloud-app.md for the residual browsers (Safari ITP,
+# hardened Firefox/Chrome) this still doesn't cover.
+def _session_cookie_opts(request: Request) -> dict:
+    secure = _is_secure(request)
+    return dict(httponly=True, samesite="none" if secure else "lax", secure=secure)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -113,7 +128,7 @@ async def _oidc_metadata() -> dict:
     return meta
 
 
-async def _issue_login(response: Response, user: User, session: AsyncSession) -> None:
+async def _issue_login(response: Response, user: User, session: AsyncSession, request: Request) -> None:
     """Establish a new browser session. Bumps token_version so any other
     browser logged in as this user is revoked (single-session takeover), then
     issues cookies carrying the new version."""
@@ -121,8 +136,9 @@ async def _issue_login(response: Response, user: User, session: AsyncSession) ->
     await session.commit()
     await session.refresh(user)
     uid, ver = str(user.id), user.token_version
-    response.set_cookie("access_token", create_access_token(uid, ver), max_age=3600, **SESSION_COOKIE_OPTS)
-    response.set_cookie("refresh_token", create_refresh_token(uid, ver), max_age=86400 * 7, **SESSION_COOKIE_OPTS)
+    opts = _session_cookie_opts(request)
+    response.set_cookie("access_token", create_access_token(uid, ver), max_age=3600, **opts)
+    response.set_cookie("refresh_token", create_refresh_token(uid, ver), max_age=86400 * 7, **opts)
 
 
 async def _bootstrap_admin(session: AsyncSession, user: User) -> None:
@@ -181,7 +197,7 @@ class RegisterRequest(BaseModel):
 
 
 @router.post("/register")
-async def register(body: RegisterRequest, session: AsyncSession = Depends(get_session)):
+async def register(body: RegisterRequest, request: Request, session: AsyncSession = Depends(get_session)):
     """Bootstrap: create the first admin account. Returns 403 once any user exists."""
     user_count = await session.scalar(select(func.count()).select_from(User))
     if user_count > 0:
@@ -205,7 +221,7 @@ async def register(body: RegisterRequest, session: AsyncSession = Depends(get_se
     await session.refresh(user)
 
     response = Response(content='{"ok": true}', media_type="application/json")
-    await _issue_login(response, user, session)
+    await _issue_login(response, user, session, request)
     return response
 
 
@@ -299,7 +315,7 @@ async def login(body: LoginRequest, request: Request, session: AsyncSession = De
         return {"requires_totp": True, "totp_token": totp_token}
 
     response = Response(content='{"ok": true}', media_type="application/json")
-    await _issue_login(response, user, session)
+    await _issue_login(response, user, session, request)
     return response
 
 
@@ -311,25 +327,26 @@ async def _bootstrap_admin_check(session: AsyncSession) -> None:
 # ── OIDC ──────────────────────────────────────────────────────────────────────
 
 @router.get("/oidc/login")
-async def oidc_login(next: str | None = None, embed: int = 0):
+async def oidc_login(request: Request, next: str | None = None, embed: int = 0):
     if not settings.oidc_issuer:
         raise HTTPException(status_code=503, detail="OIDC not configured")
     metadata = await _oidc_metadata()
     async with _oidc_client() as client:
         url, state = client.create_authorization_url(metadata["authorization_endpoint"])
     response = RedirectResponse(url)
-    response.set_cookie("oidc_state", state, max_age=300, **COOKIE_OPTS)
+    opts = _cookie_opts(request)
+    response.set_cookie("oidc_state", state, max_age=300, **opts)
     # Deep-link redirect target (e.g. "Open in Nextdesk" from Nextcloud Files) —
     # survives the round trip to the IdP and back via this cookie.
     safe_next = _safe_next_path(next)
     if safe_next:
-        response.set_cookie("oidc_next", safe_next, max_age=300, **COOKIE_OPTS)
+        response.set_cookie("oidc_next", safe_next, max_age=300, **opts)
     # Login.tsx sets this when it broke out of the Nextcloud embed iframe
     # (target="_top") to run OIDC at the top level — the callback below uses
     # it to send the user back to the Nextcloud embed page instead of
     # Nextdesk's own bare "/".
     if embed:
-        response.set_cookie("oidc_embed", "1", max_age=300, **COOKIE_OPTS)
+        response.set_cookie("oidc_embed", "1", max_age=300, **opts)
     return response
 
 
@@ -337,6 +354,7 @@ async def oidc_login(next: str | None = None, embed: int = 0):
 async def oidc_callback(
     code: str,
     state: str,
+    request: Request,
     oidc_state: str | None = Cookie(default=None),
     oidc_next: str | None = Cookie(default=None),
     oidc_embed: str | None = Cookie(default=None),
@@ -438,7 +456,7 @@ async def oidc_callback(
     response.delete_cookie("oidc_state")
     response.delete_cookie("oidc_next")
     response.delete_cookie("oidc_embed")
-    await _issue_login(response, user, session)
+    await _issue_login(response, user, session, request)
     return response
 
 
@@ -446,6 +464,7 @@ async def oidc_callback(
 
 @router.post("/refresh")
 async def refresh(
+    request: Request,
     refresh_token: str | None = Cookie(default=None),
     session: AsyncSession = Depends(get_session),
 ):
@@ -462,15 +481,16 @@ async def refresh(
     if user.token_version != payload.get("ver", 0):
         raise HTTPException(status_code=401, detail="Signed in on another device")
     response = Response()
-    response.set_cookie("access_token", create_access_token(str(user.id), user.token_version), max_age=3600, **SESSION_COOKIE_OPTS)
+    response.set_cookie("access_token", create_access_token(str(user.id), user.token_version), max_age=3600, **_session_cookie_opts(request))
     return response
 
 
 @router.post("/logout")
-async def logout():
+async def logout(request: Request):
     response = Response()
-    response.delete_cookie("access_token", samesite=SESSION_COOKIE_OPTS["samesite"])
-    response.delete_cookie("refresh_token", samesite=SESSION_COOKIE_OPTS["samesite"])
+    samesite = _session_cookie_opts(request)["samesite"]
+    response.delete_cookie("access_token", samesite=samesite)
+    response.delete_cookie("refresh_token", samesite=samesite)
     return response
 
 
@@ -571,6 +591,7 @@ async def change_my_password(
 
 @router.post("/me/sign-out-others")
 async def sign_out_others(
+    request: Request,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -578,7 +599,7 @@ async def sign_out_others(
     _issue_login bumps the version (invalidating old tokens) and re-issues fresh
     cookies for the current browser."""
     response = Response(content='{"ok": true}', media_type="application/json")
-    await _issue_login(response, user, session)
+    await _issue_login(response, user, session, request)
     return response
 
 
@@ -703,6 +724,7 @@ async def totp_disable(
 @router.post("/2fa/verify")
 async def totp_verify_login(
     body: dict,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ):
     """Verify TOTP code during login (called with a totp_pending JWT)."""
@@ -722,7 +744,7 @@ async def totp_verify_login(
         raise HTTPException(status_code=400, detail="Invalid code")
 
     response = Response()
-    await _issue_login(response, user, session)
+    await _issue_login(response, user, session, request)
     return response
 
 
