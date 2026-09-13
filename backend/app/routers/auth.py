@@ -411,7 +411,11 @@ async def oidc_callback(
         configured_url = (await nc_svc.get_system_config(session)).get("url", "")
         origin = _nextcloud_origin(configured_url)
         if origin:
-            target = f"{origin}/apps/nextdesk/"
+            # index.php/apps/... works whether or not the Nextcloud instance
+            # has "pretty URLs" (mod_rewrite) set up — bare apps/... 404s on
+            # instances that don't, since that rewrite is what maps it to
+            # index.php/apps/... in the first place.
+            target = f"{origin}/index.php/apps/nextdesk/"
 
     response = RedirectResponse(target)
     response.delete_cookie("oidc_state")

@@ -149,11 +149,15 @@ that entirely. The link also passes `embed=1` through `/api/auth/oidc/login`
 (stored server-side in a short-lived `oidc_embed` cookie alongside the
 existing `oidc_state`/`oidc_next` ones), so once the OIDC round trip
 completes, `oidc_callback` sends the top-level tab back to
-`<your Nextcloud URL>/apps/nextdesk/` instead of Nextdesk's own bare `/` —
-landing the user back inside the Nextcloud embed, now logged in, rather than
-stranding them on a full-page Nextdesk tab. That target always comes from
-server-side config, never the client, so there's no open-redirect risk in
-trusting it: it prefers the admin's storage-integration Nextcloud URL
+`<your Nextcloud URL>/index.php/apps/nextdesk/` instead of Nextdesk's own
+bare `/` — landing the user back inside the Nextcloud embed, now logged in,
+rather than stranding them on a full-page Nextdesk tab. The `index.php/`
+prefix is deliberate: it works whether or not the Nextcloud instance has
+"pretty URLs" (mod_rewrite) configured, whereas the bare `apps/nextdesk/`
+form 404s on instances that don't have that rewrite set up. That target
+always comes from server-side config, never the client, so there's no
+open-redirect risk in trusting it: it prefers the admin's storage-integration
+Nextcloud URL
 (Admin → Storage → Nextcloud, stored as `nc.url`) and, if that isn't
 configured, falls back to deriving the origin from `OIDC_ISSUER` — which is
 always set whenever OIDC login works at all, and in the "Nextcloud is the
