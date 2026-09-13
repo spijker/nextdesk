@@ -136,6 +136,21 @@ tab, because the embedded context can't see that session's cookie.
    third-party-cookie exposure at all) if this becomes a real problem for
    your users.
 
+Nextdesk already does that full-page breakout automatically for the "Sign in
+with your organisation" (OIDC) button specifically: `Login.tsx` sets
+`target="_top"` on that link whenever `window.self !== window.top` (i.e. it's
+running inside the embed iframe), so clicking it navigates the whole browser
+tab, not just the iframe. This matters even beyond cookies — when Nextcloud
+is also the OIDC provider, *its own* login/consent page can refuse to render
+nested (framebusting or `X-Frame-Options`) and will otherwise yank the tab
+back to a bare Nextcloud page mid-flow instead of completing the redirect
+back to Nextdesk. Breaking out before starting the OIDC round trip avoids
+that entirely. The trade-off: after signing in this way, the user lands on
+Nextdesk's own full-page desktop, not back inside the Nextcloud embed — they
+can navigate back to Nextcloud themselves, and the next time they open the
+Nextdesk nav entry there the iframe will just show their already-logged-in
+desktop (cookie permitting, per the caveat above).
+
 Since Nextdesk itself is typically configured to use Nextcloud as its OIDC
 provider ([auth setup](auth-setup.md#nextcloud-recommended--same-instance-as-your-storage)),
 a blocked cookie shows up as: the iframe loads Nextdesk's login page, the

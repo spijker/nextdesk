@@ -328,6 +328,14 @@ export default function Login() {
       {showOidc && (
         <a
           href={next ? `/api/auth/oidc/login?next=${encodeURIComponent(next)}` : "/api/auth/oidc/login"}
+          // Running inside the Nextcloud embed iframe (see nextcloud-app/nextdesk)?
+          // Break out to the top-level tab for the whole OIDC round trip. When
+          // Nextcloud is also the IdP, its own login/consent page can refuse to
+          // render nested (framebusting or X-Frame-Options) and forces the tab
+          // back to plain Nextcloud mid-flow instead of completing the redirect
+          // — target="_top" does that breakout deliberately, before the OIDC
+          // dance starts, so it completes cleanly instead of getting stranded.
+          target={window.self !== window.top ? "_top" : undefined}
           className="flex w-full items-center justify-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
           {methods?.oidc_label || "Sign in with your organisation"}
