@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Monitor, LogIn, Loader2, ShieldCheck, KeyRound, Eye, EyeOff } from "lucide-react";
+import { LogIn, Loader2, ShieldCheck, KeyRound, Eye, EyeOff } from "lucide-react";
 import client from "@/api/client";
 import { useAuthStore } from "@/store/auth";
 import { useDesktopStore } from "@/store/desktop";
@@ -154,12 +154,10 @@ export default function Login() {
           <div className="mb-8 flex flex-col items-center gap-4">
             <div className="relative">
               <div className="absolute inset-0 rounded-2xl bg-indigo-500 blur-lg opacity-40" />
-              <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-xl">
-                <Monitor className="h-8 w-8 text-white" />
-              </div>
+              <img src="/nextdesk-logo.png" alt="Nextdesk" className="relative h-16 w-16 rounded-2xl shadow-xl" />
             </div>
             <div className="text-center">
-              <h1 className="text-2xl font-bold tracking-tight text-white">Nextcloud Linux Workspace</h1>
+              <h1 className="text-2xl font-bold tracking-tight text-white">Nextdesk</h1>
               <p className="mt-1 text-sm text-white/40">Browser-based remote desktops</p>
             </div>
           </div>
