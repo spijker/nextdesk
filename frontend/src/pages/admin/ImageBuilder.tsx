@@ -30,7 +30,7 @@ const STATUS_COLORS: Record<string, string> = {
   push_failed:"bg-red-400",
 };
 
-const DEFAULT_DOCKERFILE = `FROM lwp-vnc-base
+const DEFAULT_DOCKERFILE = `FROM lwp-kasm-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     your-app \\

@@ -16,6 +16,7 @@ const POLICY_FLAGS: { key: string; label: string; hint: string }[] = [
   { key: "disable_download", label: "Block downloads", hint: "No file downloads out of the workspace" },
   { key: "disable_upload", label: "Block uploads", hint: "No file uploads into the workspace" },
   { key: "disable_clipboard", label: "Block clipboard", hint: "Disable the clipboard bridge" },
+  { key: "force_simple_layout", label: "Force simple layout", hint: "No taskbar/launcher — just Files and app tiles. Overrides the user's own layout choice." },
 ];
 
 function GroupPolicies({ group }: { group: Group }) {

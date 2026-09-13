@@ -280,6 +280,7 @@ async def create_session(
         mount_home=app.mount_home,
         env_json=effective_env,
         needs_fuse=bool(nc_env) or bool(mount_env),
+        needs_userns=bool(effective_env.get("LWP_FLATPAK_APP_ID")),
     )
 
     sess.upstream_host = upstream_host
@@ -350,6 +351,35 @@ async def update_window_state(
     if not sess:
         raise HTTPException(status_code=404, detail="Session not found")
     sess.window_state = body
+    await db.commit()
+    return {"ok": True}
+
+
+# Small JPEG at 480px wide / 0.55 quality (see sessionFrames.ts) — a generous
+# ceiling well above that, just to bound what a client can push into the row.
+THUMBNAIL_MAX_BYTES = 300_000
+
+
+@router.patch("/{session_id}/thumbnail")
+async def update_thumbnail(
+    session_id: uuid.UUID,
+    body: dict,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Periodic live preview for admin support/moderation — see
+    lib/sessionFrames.ts's client-side capture and Window.tsx's uploader."""
+    data_url = str(body.get("data_url", ""))
+    if not data_url.startswith("data:image/") or len(data_url) > THUMBNAIL_MAX_BYTES:
+        raise HTTPException(status_code=422, detail="Invalid thumbnail")
+    result = await db.execute(
+        select(Session).where(Session.id == session_id, Session.user_id == user.id)
+    )
+    sess = result.scalar_one_or_none()
+    if not sess:
+        raise HTTPException(status_code=404, detail="Session not found")
+    sess.thumbnail = data_url
+    sess.thumbnail_updated_at = datetime.now(UTC)
     await db.commit()
     return {"ok": True}
 

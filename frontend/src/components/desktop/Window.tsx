@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Rnd } from "react-rnd";
-import { Minus, Maximize2, Minimize2, X, Clipboard, Volume2, VolumeX, RefreshCw, Wifi, Share2, Copy, Trash2, Check, Zap, Shield } from "lucide-react";
+import { Minus, Maximize2, Minimize2, X, Clipboard, Volume2, VolumeX, RefreshCw, Wifi, Share2, Copy, Trash2, Check, Zap, Shield, Pin } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import client from "@/api/client";
@@ -16,13 +16,21 @@ import { cn } from "@/lib/utils";
 
 const TASKBAR_H = 48;
 const SNAP_PX   = 18; // px from edge/top to trigger snap zone
+const CORNER_PX = 40; // corners are a smaller target — give them more room, checked before the edges below
 
-type SnapZone = "maximize" | "left" | "right" | null;
+type SnapZone = "maximize" | "left" | "right" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | null;
 
 function getSnapZone(mx: number, my: number): SnapZone {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  // Corners take priority — they'd otherwise also match the edge checks below.
+  if (mx <= CORNER_PX && my <= CORNER_PX) return "top-left";
+  if (mx >= vw - CORNER_PX && my <= CORNER_PX) return "top-right";
+  if (mx <= CORNER_PX && my >= vh - CORNER_PX) return "bottom-left";
+  if (mx >= vw - CORNER_PX && my >= vh - CORNER_PX) return "bottom-right";
   if (my <= SNAP_PX) return "maximize";
   if (mx <= SNAP_PX) return "left";
-  if (mx >= window.innerWidth - SNAP_PX) return "right";
+  if (mx >= vw - SNAP_PX) return "right";
   return null;
 }
 
@@ -30,10 +38,16 @@ function getSnapZone(mx: number, my: number): SnapZone {
 function SnapPreview({ zone }: { zone: NonNullable<SnapZone> }) {
   const vw = window.innerWidth;
   const vh = window.innerHeight - TASKBAR_H;
+  const halfW = vw / 2;
+  const halfH = vh / 2;
   const style =
-    zone === "maximize" ? { left: 0, top: 0, width: vw, height: vh } :
-    zone === "left"     ? { left: 0, top: 0, width: vw / 2, height: vh } :
-                          { left: vw / 2, top: 0, width: vw / 2, height: vh };
+    zone === "maximize"    ? { left: 0,     top: 0,     width: vw,    height: vh }    :
+    zone === "left"        ? { left: 0,     top: 0,     width: halfW, height: vh }    :
+    zone === "right"       ? { left: halfW, top: 0,     width: halfW, height: vh }    :
+    zone === "top-left"    ? { left: 0,     top: 0,     width: halfW, height: halfH } :
+    zone === "top-right"   ? { left: halfW, top: 0,     width: halfW, height: halfH } :
+    zone === "bottom-left" ? { left: 0,     top: halfH, width: halfW, height: halfH } :
+                              { left: halfW, top: halfH, width: halfW, height: halfH };
   return (
     <div
       className="pointer-events-none fixed z-[9990] rounded-2xl border border-indigo-400/25 bg-indigo-500/10 backdrop-blur-[2px] transition-all duration-100"
@@ -48,7 +62,7 @@ export function Window({ win }: Props) {
   const {
     focusWindow, minimizeWindow, toggleMaximize, closeWindow, toggleMute,
     setVolume, updateBounds, maxZ, interacting, setInteracting, resumeWindow,
-    dismissSession,
+    dismissSession, toggleAlwaysOnTop,
   } = useDesktopStore();
   const qc          = useQueryClient();
   // WebCodecs beta: replace the VNC iframe with a low-latency H.264 canvas (view-only)
@@ -114,6 +128,35 @@ export function Window({ win }: Props) {
   // Deregister the iframe from the shared-clipboard registry on unmount.
   useEffect(() => () => unregisterFrame(win.windowId), [win.windowId]);
 
+  // Maximized size, as plain numbers rather than "100vw"/calc(100vh - Npx)
+  // strings — react-rnd tracks size internally (for its own resize-handle
+  // bounds math) by coercing the size prop, and a calc() expression there
+  // comes out NaN, which is likely why maximize alone (unlike a manual drag,
+  // which always hands Rnd plain measured pixel numbers) has been landing on
+  // the wrong height. Recomputed on real browser-window resizes too.
+  const [viewport, setViewport] = useState({ w: window.innerWidth, h: window.innerHeight });
+  useEffect(() => {
+    const onResize = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // KasmVNC's "resize=remote" mode re-requests the remote desktop size on
+  // the iframe's own `resize` event — which only fires for a real change to
+  // the OUTER browser window. The iframe is never unmounted across maximize/
+  // restore/resize (see comment below), so its CSS size changes without the
+  // browser window itself changing, and the remote stays locked at whatever
+  // size it first connected at (looks "stuck" well under the window's actual
+  // size). Nudge it after every size change with a synthetic resize event.
+  useEffect(() => {
+    const w = iframeRef.current?.contentWindow;
+    if (!w) return;
+    const id = requestAnimationFrame(() => {
+      try { w.dispatchEvent(new Event("resize")); } catch {}
+    });
+    return () => cancelAnimationFrame(id);
+  }, [win.maximized, win.width, win.height, viewport.w, viewport.h]);
+
   // Animate in on open; re-trigger on restore from minimized
   const [entering, setEntering] = useState(true);
   const prevMinimized = useRef(win.minimized);
@@ -140,6 +183,22 @@ export function Window({ win }: Props) {
   }, [minimizeWindow, win.windowId]);
 
   const isActive = win.zIndex === maxZ;
+
+  // Periodic live preview for admin support/moderation (Sessions admin page)
+  // — same trust boundary as session recording, so gated on the same group
+  // policy. Only while the window is actually visible; web-native apps have
+  // no canvas to capture, so captureSnapshot silently no-ops for them.
+  useEffect(() => {
+    if (win.suspended || win.minimized) return;
+    if (!useAuthStore.getState().user?.policies?.record_sessions) return;
+    const upload = () => {
+      const url = captureSnapshot(win.windowId);
+      if (url) client.patch(`/api/sessions/${win.sessionId}/thumbnail`, { data_url: url }).catch(() => {});
+    };
+    upload();
+    const t = setInterval(upload, 20_000);
+    return () => clearInterval(t);
+  }, [win.suspended, win.minimized, win.windowId, win.sessionId]);
 
   const saveBounds = useCallback(
     (x: number, y: number, w: number, h: number) => {
@@ -212,7 +271,7 @@ export function Window({ win }: Props) {
       <Rnd
         position={win.maximized ? { x: 0, y: 0 } : { x: win.x, y: win.y }}
         size={win.maximized
-          ? { width: "100vw", height: `calc(100vh - ${TASKBAR_H}px)` }
+          ? { width: viewport.w, height: viewport.h - TASKBAR_H }
           : { width: win.width, height: win.height }}
         minWidth={480}
         minHeight={320}
@@ -221,7 +280,10 @@ export function Window({ win }: Props) {
         cancel="button"
         disableDragging={win.maximized}
         enableResizing={win.maximized ? false : undefined}
-        style={{ zIndex: win.zIndex, position: "fixed", display: hidden ? "none" : undefined }}
+        // Always-on-top windows sit in their own tier, well above the normal
+        // stack, regardless of focus order — offset is far larger than maxZ
+        // could realistically reach in one session.
+        style={{ zIndex: win.alwaysOnTop ? win.zIndex + 100000 : win.zIndex, position: "fixed", display: hidden ? "none" : undefined }}
         // ── focus on any click anywhere in the window ───────────────────────
         onMouseDown={() => focusWindow(win.windowId)}
         // ── drag ───────────────────────────────────────────────────────────
@@ -245,6 +307,15 @@ export function Window({ win }: Props) {
             const nx = zone === "left" ? 0 : hw;
             updateBounds(win.windowId, nx, 0, hw, fh);
             saveBounds(nx, 0, hw, fh);
+            return;
+          }
+          if (zone === "top-left" || zone === "top-right" || zone === "bottom-left" || zone === "bottom-right") {
+            const hw = Math.floor(window.innerWidth / 2);
+            const hh = Math.floor((window.innerHeight - TASKBAR_H) / 2);
+            const nx = zone.endsWith("right") ? hw : 0;
+            const ny = zone.startsWith("bottom") ? hh : 0;
+            updateBounds(win.windowId, nx, ny, hw, hh);
+            saveBounds(nx, ny, hw, hh);
             return;
           }
           updateBounds(win.windowId, d.x, d.y, win.width, win.height);
@@ -291,6 +362,8 @@ export function Window({ win }: Props) {
             onVolume={(v) => setVolume(win.windowId, v)}
             videoOn={videoMode}
             onVideo={() => setVideoMode((v) => !v)}
+            alwaysOnTop={win.alwaysOnTop}
+            onToggleAlwaysOnTop={() => toggleAlwaysOnTop(win.windowId)}
           />
 
           {/* Content + iframe overlay */}
@@ -429,7 +502,7 @@ function ClipboardPanel({ onClose }: { onClose(): void }) {
 
 function TitleBar({
   win, onMinimize, onMaximize, onClose, onMute, onVolume, isMaximized, active,
-  videoOn, onVideo,
+  videoOn, onVideo, alwaysOnTop, onToggleAlwaysOnTop,
 }: {
   win: AppWindow;
   onVolume(v: number): void;
@@ -441,6 +514,8 @@ function TitleBar({
   active: boolean;
   videoOn: boolean;
   onVideo(): void;
+  alwaysOnTop: boolean;
+  onToggleAlwaysOnTop(): void;
 }) {
   const [clipOpen, setClipOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
@@ -563,6 +638,18 @@ function TitleBar({
           className="flex h-5 w-5 items-center justify-center rounded text-gray-400 hover:bg-black/10 hover:text-gray-600 dark:text-white/30 dark:hover:bg-white/10 dark:hover:text-white/70 transition-colors"
         >
           <Share2 className="h-3 w-3" />
+        </button>
+        <button
+          title={alwaysOnTop ? "Always on top (click to unpin)" : "Keep on top of other windows"}
+          onClick={(e) => { e.stopPropagation(); onToggleAlwaysOnTop(); }}
+          className={cn(
+            "flex h-5 w-5 items-center justify-center rounded transition-colors",
+            alwaysOnTop
+              ? "text-indigo-500 hover:text-indigo-400 dark:text-indigo-400 dark:hover:text-indigo-300"
+              : "text-gray-400 hover:bg-black/10 hover:text-gray-600 dark:text-white/30 dark:hover:bg-white/10 dark:hover:text-white/70",
+          )}
+        >
+          <Pin className={cn("h-3 w-3", alwaysOnTop && "fill-current")} />
         </button>
         <div className="mx-1 h-3 w-px bg-black/10 dark:bg-white/10" />
         <WinBtn

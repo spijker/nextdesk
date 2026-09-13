@@ -23,6 +23,8 @@ import { StorageWindow } from "@/components/desktop/StorageWindow";
 import { ProfileWindow } from "@/components/desktop/ProfileWindow";
 import { FileManagerWindow } from "@/components/desktop/FileManagerWindow";
 import { CommandPalette } from "@/components/desktop/CommandPalette";
+import { LockScreen } from "@/components/desktop/LockScreen";
+import { SimpleModeMenu } from "@/components/desktop/SimpleModeMenu";
 import { useOpenFilePoll } from "@/hooks/useOpenFilePoll";
 import { useClipboardCapture } from "@/hooks/useClipboardCapture";
 import { useSessionHeartbeat } from "@/hooks/useSessionHeartbeat";
@@ -35,15 +37,23 @@ export default function Desktop() {
   const {
     windows, launcherOpen, setLauncherOpen,
     adminOpen,
-    storageOpen, profileOpen, fileManagerOpen,
+    storageOpen, profileOpen, setProfileOpen, fileManagerOpen,
     launching,
     wallpaper, pinned, restoreFromSessions, ensureSystemIcons,
     focusWindow, closeWindow,
-    theme, desktopLayout,
+    theme, desktopLayout, layoutMode,
     activeWorkspace,
     suspendWindow, resumeWindow,
     detached, detachAll, setDetached,
+    locked, setLocked,
   } = useDesktopStore();
+
+  // Simple mode (Profile → Appearance, or forced by a group's
+  // force_simple_layout policy): no taskbar/launcher/window-management
+  // chrome — just Files + app tiles (DesktopTiles) and a single corner menu
+  // for profile/logout (SimpleModeMenu). Policy always wins over the user's
+  // own preference.
+  const simpleMode = !!user?.policies?.force_simple_layout || layoutMode === "simple";
 
   // Session transfer between tabs: the most recently opened desktop tab claims
   // the sessions; other tabs detach their windows (containers keep running)
@@ -67,7 +77,25 @@ export default function Desktop() {
 
   // Idle timer — suspend sessions after 15 min inactivity
   const IDLE_MS = 15 * 60 * 1000;
+  const IDLE_WARNING_MS = 60 * 1000; // heads-up this long before the real idle timeout
+  const warnToastId = useRef<string | number | null>(null);
   const qc = useQueryClient();
+
+  const onIdleWarning = useCallback(() => {
+    // Only worth warning about if something is actually about to happen.
+    const hasPin = !!useAuthStore.getState().user?.lock_pin_enabled;
+    const hasRunning = useDesktopStore.getState().windows.some((w) => !w.suspended);
+    if (!hasPin && !hasRunning) return;
+    warnToastId.current = toast.warning(
+      `Going idle in ${IDLE_WARNING_MS / 1000}s — ${hasPin ? "your desktop will lock" : "sessions will be suspended"}`,
+      { duration: IDLE_WARNING_MS }
+    );
+  }, []);
+  const onActiveAfterWarning = useCallback(() => {
+    if (warnToastId.current != null) { toast.dismiss(warnToastId.current); warnToastId.current = null; }
+  }, []);
+  useIdleTimer({ idleMs: IDLE_MS - IDLE_WARNING_MS, onIdle: onIdleWarning, onActive: onActiveAfterWarning });
+
   const onIdle = useCallback(() => {
     // Background-eligible apps (Terminal) stay running when the user opted in —
     // pausing would freeze their tmux jobs. The backend reaper caps them at 48h.
@@ -78,15 +106,18 @@ export default function Desktop() {
     const running = useDesktopStore.getState().windows.filter(
       (w) => !w.suspended && w.workspace !== undefined && !bgIds.has(w.appId)
     );
-    if (!running.length) return;
-    running.forEach((w) => {
-      client.post(`/api/sessions/${w.sessionId}/pause`).catch(() => {});
-      suspendWindow(w.windowId);
-    });
-    toast.info(`${running.length} session${running.length > 1 ? "s" : ""} suspended due to inactivity`);
-  }, [suspendWindow, qc]);
+    if (running.length) {
+      running.forEach((w) => {
+        client.post(`/api/sessions/${w.sessionId}/pause`).catch(() => {});
+        suspendWindow(w.windowId);
+      });
+      toast.info(`${running.length} session${running.length > 1 ? "s" : ""} suspended due to inactivity`);
+    }
+    // Privacy screen (Profile → Security) — only if the user set a PIN.
+    if (useAuthStore.getState().user?.lock_pin_enabled) setLocked(true);
+  }, [suspendWindow, qc, setLocked]);
 
-  const onActive = useCallback(() => {
+  const resumeSuspended = useCallback(() => {
     const suspended = useDesktopStore.getState().windows.filter((w) => w.suspended);
     if (!suspended.length) return;
     suspended.forEach((w) => {
@@ -95,6 +126,17 @@ export default function Desktop() {
     });
     toast.success("Sessions resumed");
   }, [resumeWindow]);
+
+  const onActive = useCallback(() => {
+    // Locked desktop waits for the PIN (LockScreen.onUnlock), not mere activity.
+    if (useDesktopStore.getState().locked) return;
+    resumeSuspended();
+  }, [resumeSuspended]);
+
+  const handleUnlock = useCallback(() => {
+    setLocked(false);
+    resumeSuspended();
+  }, [setLocked, resumeSuspended]);
 
   useIdleTimer({ idleMs: IDLE_MS, onIdle, onActive });
   useOpenFilePoll();
@@ -144,30 +186,56 @@ export default function Desktop() {
     const onDown = (e: KeyboardEvent) => {
       if (e.key === "Alt") { altHeld.current = true; return; }
 
-      // Ctrl/Cmd+K — command palette
-      if (e.key.toLowerCase() === "k" && (e.ctrlKey || e.metaKey)) {
+      // Simple mode has no launcher/palette/switcher/Exposé to toggle — the
+      // chrome those overlays belong to isn't rendered at all (see
+      // simpleMode below), only the escape hatches (lock, show desktop) stay.
+      if (!simpleMode) {
+        // Ctrl/Cmd+K — command palette
+        if (e.key.toLowerCase() === "k" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          setPaletteOpen((v) => !v);
+          return;
+        }
+
+        // Alt+Tab — window switcher
+        if (e.key === "Tab" && altHeld.current) {
+          e.preventDefault();
+          const wins = windowsRef.current;
+          if (!wins.length) return;
+          setAltTabOpen(true);
+          setAltTabIdx((prev) => {
+            const next = e.shiftKey ? prev - 1 : prev + 1;
+            return ((next % wins.length) + wins.length) % wins.length;
+          });
+          return;
+        }
+
+        // Super/Meta — toggle launcher; Super+Tab — Exposé
+        if (e.key === "Meta" && !e.repeat) {
+          if (e.shiftKey) { setExposeOpen((v) => !v); return; }
+          setLauncherOpen(!launcherOpen);
+          return;
+        }
+      }
+
+      // Super+L — lock now (only if a PIN is configured). The bare Meta
+      // keydown above already fired and toggled the launcher open; close it
+      // back since the lock screen is about to cover everything anyway.
+      if (e.key.toLowerCase() === "l" && e.metaKey) {
         e.preventDefault();
-        setPaletteOpen((v) => !v);
+        if (useAuthStore.getState().user?.lock_pin_enabled) {
+          setLauncherOpen(false);
+          setLocked(true);
+        }
         return;
       }
 
-      // Alt+Tab — window switcher
-      if (e.key === "Tab" && altHeld.current) {
+      // Super+D — show desktop (minimize/restore all). Same launcher-closing
+      // cleanup as Super+L, for the same reason.
+      if (e.key.toLowerCase() === "d" && e.metaKey) {
         e.preventDefault();
-        const wins = windowsRef.current;
-        if (!wins.length) return;
-        setAltTabOpen(true);
-        setAltTabIdx((prev) => {
-          const next = e.shiftKey ? prev - 1 : prev + 1;
-          return ((next % wins.length) + wins.length) % wins.length;
-        });
-        return;
-      }
-
-      // Super/Meta — toggle launcher; Super+Tab — Exposé
-      if (e.key === "Meta" && !e.repeat) {
-        if (e.shiftKey) { setExposeOpen((v) => !v); return; }
-        setLauncherOpen(!launcherOpen);
+        setLauncherOpen(false);
+        useDesktopStore.getState().showDesktop();
         return;
       }
 
@@ -196,7 +264,7 @@ export default function Desktop() {
       window.removeEventListener("keydown", onDown);
       window.removeEventListener("keyup", onUp);
     };
-  }, [altTabOpen, altTabIdx, exposeOpen, launcherOpen, paletteOpen]);
+  }, [altTabOpen, altTabIdx, exposeOpen, launcherOpen, paletteOpen, simpleMode]);
 
   const { data: sessions = [], isSuccess: sessionsLoaded } = useQuery<Session[]>({
     queryKey: ["sessions"],
@@ -250,11 +318,58 @@ export default function Desktop() {
   }, [sessions, sessionsLoaded, closeWindow]);
 
   const handleDesktopRightClick = (e: React.MouseEvent) => {
+    if (simpleMode) return; // no desktop menu in Simple mode
     // Only fire if click is on the desktop canvas itself
     if ((e.target as HTMLElement).closest("[data-no-ctx]")) return;
     e.preventDefault();
     setDesktopCtx({ x: e.clientX, y: e.clientY });
   };
+
+  // Marquee (drag-select) for desktop icons — click-drag empty desktop space
+  // to lasso multiple icons, then Delete/Backspace to bulk-remove them.
+  const [selectedIcons, setSelectedIcons] = useState<Set<string>>(new Set());
+  const [marqueeStart, setMarqueeStart] = useState<{ x: number; y: number } | null>(null);
+  const [marqueeNow, setMarqueeNow] = useState<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    if (!marqueeStart) return;
+    const onMove = (e: MouseEvent) => {
+      setMarqueeNow({ x: e.clientX, y: e.clientY });
+      const x0 = Math.min(marqueeStart.x, e.clientX), x1 = Math.max(marqueeStart.x, e.clientX);
+      const y0 = Math.min(marqueeStart.y, e.clientY), y1 = Math.max(marqueeStart.y, e.clientY);
+      const next = new Set<string>();
+      document.querySelectorAll("[data-desktop-icon]").forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.left < x1 && r.right > x0 && r.top < y1 && r.bottom > y0) {
+          next.add(el.getAttribute("data-desktop-icon")!);
+        }
+      });
+      setSelectedIcons(next);
+    };
+    const onUp = () => { setMarqueeStart(null); setMarqueeNow(null); };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [marqueeStart]);
+
+  // Delete/Backspace removes the selected (non-system) icons from the desktop.
+  useEffect(() => {
+    if (!selectedIcons.size) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+      const removable = pinned.filter((p) => selectedIcons.has(p.id) && !p.isSystem);
+      if (!removable.length) return;
+      removable.forEach((p) => useDesktopStore.getState().removePinned(p.id));
+      setSelectedIcons(new Set());
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedIcons, pinned]);
 
   const bg = wallpaper || DEFAULT_WALLPAPER;
   const isGradient = bg.startsWith("linear-gradient") || bg.startsWith("radial-gradient") || bg.startsWith("#");
@@ -268,9 +383,18 @@ export default function Desktop() {
           : { backgroundImage: `url("${bg}")`, backgroundSize: "cover", backgroundPosition: "center" }
       }
       onContextMenu={handleDesktopRightClick}
-      onMouseDown={() => {
+      onMouseDown={(e) => {
         if (launcherOpen) setLauncherOpen(false);
         if (desktopCtx) setDesktopCtx(null);
+        // Marquee select — only starts on a genuine click on the bare
+        // desktop (not an icon/window/taskbar), left button only.
+        if (e.target === e.currentTarget && e.button === 0) {
+          setSelectedIcons(new Set());
+          setMarqueeStart({ x: e.clientX, y: e.clientY });
+          setMarqueeNow({ x: e.clientX, y: e.clientY });
+        } else if (selectedIcons.size) {
+          setSelectedIcons(new Set());
+        }
       }}
     >
       {/* Session-transfer overlay: another tab claimed the desktop */}
@@ -292,18 +416,32 @@ export default function Desktop() {
         </div>
       )}
 
-      {/* Desktop icons / tiles — layout controlled by desktopLayout */}
-      {desktopLayout === "icons" && pinned.length > 0 && (
+      {/* Desktop icons / tiles — layout controlled by desktopLayout, except
+          Simple mode always forces the tile grid regardless of that pref. */}
+      {!simpleMode && desktopLayout === "icons" && pinned.length > 0 && (
         <div className="absolute left-3 top-3 flex flex-col gap-1 pb-14" data-no-ctx>
           {pinned.map((item) => (
-            <DesktopIcon key={item.id} item={item} apps={apps} />
+            <DesktopIcon key={item.id} item={item} apps={apps} selected={selectedIcons.has(item.id)} />
           ))}
         </div>
       )}
-      {desktopLayout === "tiles" && (
+      {(simpleMode || desktopLayout === "tiles") && (
         <div data-no-ctx>
           <DesktopTiles apps={apps} />
         </div>
+      )}
+
+      {/* Marquee drag-select rectangle */}
+      {marqueeStart && marqueeNow && (
+        <div
+          className="pointer-events-none fixed z-[9990] rounded-sm border border-indigo-400/60 bg-indigo-400/10"
+          style={{
+            left: Math.min(marqueeStart.x, marqueeNow.x),
+            top: Math.min(marqueeStart.y, marqueeNow.y),
+            width: Math.abs(marqueeNow.x - marqueeStart.x),
+            height: Math.abs(marqueeNow.y - marqueeStart.y),
+          }}
+        />
       )}
 
       {/* App windows — only show windows belonging to the active workspace */}
@@ -314,7 +452,7 @@ export default function Desktop() {
       ))}
 
       {/* App launcher overlay */}
-      {launcherOpen && (
+      {!simpleMode && launcherOpen && (
         <div data-no-ctx>
           <AppLauncher onClose={() => setLauncherOpen(false)} />
         </div>
@@ -326,6 +464,17 @@ export default function Desktop() {
           x={desktopCtx.x}
           y={desktopCtx.y}
           items={[
+            {
+              label: "Set wallpaper",
+              icon: "🖼️",
+              onClick: () => setShowWallpaper(true),
+            },
+            {
+              label: "Settings",
+              icon: "⚙️",
+              onClick: () => setProfileOpen(true),
+            },
+            { label: "", onClick: () => {}, divider: true },
             {
               label: "App launcher",
               icon: "⊞",
@@ -371,14 +520,22 @@ export default function Desktop() {
         </div>
       )}
 
-      {/* Taskbar — always on top */}
+      {/* Announcements stay visible even in Simple mode — only the taskbar
+          chrome itself is Simple mode's business. */}
       <div data-no-ctx>
         <SystemBanner />
-        <Taskbar onExposeOpen={() => setExposeOpen(true)} />
       </div>
 
+      {/* Taskbar — always on top */}
+      {!simpleMode && (
+        <div data-no-ctx>
+          <Taskbar onExposeOpen={() => setExposeOpen(true)} />
+        </div>
+      )}
+      {simpleMode && <SimpleModeMenu />}
+
       {/* Alt+Tab window switcher */}
-      {altTabOpen && (
+      {!simpleMode && altTabOpen && (
         <div data-no-ctx>
           <AltTabSwitcher
             selectedIdx={altTabIdx}
@@ -388,7 +545,7 @@ export default function Desktop() {
       )}
 
       {/* Exposé / Mission Control */}
-      {exposeOpen && (
+      {!simpleMode && exposeOpen && (
         <div data-no-ctx>
           <Expose
             onClose={() => setExposeOpen(false)}
@@ -398,7 +555,7 @@ export default function Desktop() {
       )}
 
       {/* Launch overlay — shown while container starts */}
-      {paletteOpen && <CommandPalette apps={apps} onClose={() => setPaletteOpen(false)} />}
+      {!simpleMode && paletteOpen && <CommandPalette apps={apps} onClose={() => setPaletteOpen(false)} />}
 
       {launching && <LaunchPanel info={launching} />}
 
@@ -406,6 +563,9 @@ export default function Desktop() {
       {showOnboarding && user && (
         <OnboardingModal userId={String(user.id)} onDone={() => setShowOnboarding(false)} />
       )}
+
+      {/* Idle privacy screen — last, so it covers everything else */}
+      {locked && <LockScreen onUnlock={handleUnlock} />}
     </div>
   );
 }

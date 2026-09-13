@@ -1,4 +1,6 @@
 import logging
+import re
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -410,6 +412,7 @@ async def me(
         "auth_source": user.auth_source,
         "preferences": user.preferences or {},
         "totp_enabled": bool(user.totp_secret_enc),
+        "lock_pin_enabled": bool(user.lock_pin_hash),
         "nc_connected": bool(user.nc_password_enc),
         # DLP/security flags from group policy — the UI hides the affected
         # controls; the API endpoints enforce them server-side too.
@@ -645,3 +648,78 @@ async def totp_verify_login(
     response = Response()
     await _issue_login(response, user, session)
     return response
+
+
+# ── Idle lock screen PIN ────────────────────────────────────────────────────────
+# A short PIN that re-gates an already-authenticated browser tab after the
+# idle timer locks it — not a full re-auth (the session/JWT stays valid the
+# whole time), so it's independent of the account password/OIDC login.
+
+PIN_RE = re.compile(r"^\d{4,8}$")
+PIN_MAX_FAILS = 5
+PIN_LOCKOUT_SECONDS = 30
+
+
+class _LockPinBody(BaseModel):
+    pin: str
+
+
+@router.post("/lock-pin")
+async def set_lock_pin(
+    body: _LockPinBody,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    if not PIN_RE.match(body.pin):
+        raise HTTPException(status_code=422, detail="PIN must be 4-8 digits")
+    result = await session.execute(select(User).where(User.id == user.id))
+    db_user = result.scalar_one()
+    db_user.lock_pin_hash = hash_password(body.pin)
+    db_user.lock_pin_fail_count = 0
+    db_user.lock_pin_locked_until = None
+    await session.commit()
+    return {"ok": True}
+
+
+@router.delete("/lock-pin")
+async def disable_lock_pin(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(User).where(User.id == user.id))
+    db_user = result.scalar_one()
+    db_user.lock_pin_hash = None
+    db_user.lock_pin_fail_count = 0
+    db_user.lock_pin_locked_until = None
+    await session.commit()
+    return {"ok": True}
+
+
+@router.post("/lock-pin/verify")
+async def verify_lock_pin(
+    body: _LockPinBody,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(User).where(User.id == user.id))
+    db_user = result.scalar_one()
+    if not db_user.lock_pin_hash:
+        raise HTTPException(status_code=400, detail="No lock PIN set")
+
+    now = datetime.now(UTC)
+    if db_user.lock_pin_locked_until and db_user.lock_pin_locked_until > now:
+        wait_s = int((db_user.lock_pin_locked_until - now).total_seconds())
+        raise HTTPException(status_code=429, detail=f"Too many attempts — try again in {wait_s}s")
+
+    if not verify_password(body.pin, db_user.lock_pin_hash):
+        db_user.lock_pin_fail_count += 1
+        if db_user.lock_pin_fail_count >= PIN_MAX_FAILS:
+            db_user.lock_pin_locked_until = now + timedelta(seconds=PIN_LOCKOUT_SECONDS)
+            db_user.lock_pin_fail_count = 0
+        await session.commit()
+        raise HTTPException(status_code=401, detail="Incorrect PIN")
+
+    db_user.lock_pin_fail_count = 0
+    db_user.lock_pin_locked_until = None
+    await session.commit()
+    return {"ok": True}

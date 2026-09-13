@@ -3,7 +3,7 @@ import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import {
   ShieldCheck, Users, Cloud, CheckCircle, XCircle,
   ExternalLink, Loader2, Palette, LayoutGrid, Moon, Sun, Monitor, Trash2, KeyRound,
-  Lock, LogOut, HardDrive, History, Pencil, Plus, Server, Database, Type, Maximize2,
+  Lock, LockKeyhole, LogOut, HardDrive, History, Pencil, Plus, Server, Database, Type, Maximize2,
   UserCircle, SlidersHorizontal,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -182,8 +182,15 @@ function NcConnect() {
   );
 }
 
+const LAYOUT_MODES: { id: "desktop" | "simple"; icon: string; label: string; desc: string }[] = [
+  { id: "desktop", icon: "🖥️", label: "Desktop", desc: "Taskbar, launcher, window management" },
+  { id: "simple",  icon: "🔲", label: "Simple",  desc: "Just Files and app tiles, nothing else" },
+];
+
 function Appearance() {
-  const { wallpaper, setWallpaper, theme, setTheme, desktopLayout, setDesktopLayout } = useDesktopStore();
+  const { wallpaper, setWallpaper, theme, setTheme, desktopLayout, setDesktopLayout, layoutMode, setLayoutMode } = useDesktopStore();
+  const { user } = useAuthStore();
+  const forcedSimple = !!user?.policies?.force_simple_layout;
   const [custom, setCustom] = useState("");
 
   return (
@@ -225,6 +232,30 @@ function Appearance() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div>
+        <p className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Window management</p>
+        {forcedSimple ? (
+          <p className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-800/50">
+            Your group's policy locks this to Simple mode.
+          </p>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {LAYOUT_MODES.map((l) => (
+              <button key={l.id} onClick={() => setLayoutMode(l.id)}
+                className={cn("flex flex-col items-center gap-1.5 rounded-xl border px-2 py-3 text-xs transition-all",
+                  layoutMode === l.id
+                    ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
+                    : "border-gray-200 text-gray-400 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600"
+                )}>
+                <span className="text-xl mb-0.5">{l.icon}</span>
+                <span className="font-medium">{l.label}</span>
+                <span className="text-center leading-tight opacity-60">{l.desc}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div>
@@ -888,6 +919,7 @@ export default function Profile() {
               <AboutYou />
               <SecuritySection />
               {(user?.auth_source === "local" || user?.auth_source === "ldap") && <TwoFactorAuth />}
+              <LockPinSection />
             </>
           )}
           {page === "storage" && (
@@ -1028,6 +1060,111 @@ function TwoFactorAuth() {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Idle lock screen PIN ───────────────────────────────────────────────────────
+// Separate from the account password/OIDC login — it just re-gates an
+// already-authenticated tab after the idle timer locks it, so any user
+// (regardless of auth_source) can set one.
+
+function LockPinSection() {
+  const { user, setUser } = useAuthStore();
+  const isEnabled = user?.lock_pin_enabled ?? false;
+  const [pin, setPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [error, setError] = useState("");
+
+  const refreshUser = async () => {
+    const { data } = await client.get("/api/auth/me");
+    setUser(data);
+  };
+
+  const setPinMutation = useMutation({
+    mutationFn: () => client.post("/api/auth/lock-pin", { pin }),
+    onSuccess: async () => {
+      await refreshUser();
+      setPin(""); setConfirmPin(""); setError("");
+      toast.success("Lock PIN set");
+    },
+    onError: (e: any) => setError(e.response?.data?.detail ?? "Failed"),
+  });
+
+  const disable = useMutation({
+    mutationFn: () => client.delete("/api/auth/lock-pin"),
+    onSuccess: async () => { await refreshUser(); toast.success("Idle lock disabled"); },
+    onError: () => toast.error("Failed"),
+  });
+
+  const digitsOk = /^\d{4,8}$/.test(pin);
+  const canSave = digitsOk && pin === confirmPin;
+
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-900">
+      <div className="mb-4 flex items-center gap-2">
+        <LockKeyhole className="h-4 w-4 text-indigo-500" />
+        <h2 className="font-semibold">Idle lock screen</h2>
+        {isEnabled && (
+          <span className="ml-auto flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+            <CheckCircle className="h-3 w-3" /> Enabled
+          </span>
+        )}
+      </div>
+
+      <p className="mb-4 text-sm text-gray-500">
+        Set a PIN and your desktop locks itself after 15 minutes idle — a quick
+        privacy screen, not a full sign-out. Your open apps and sessions keep
+        running behind it.
+      </p>
+
+      <div className="space-y-2">
+        <input
+          type="password"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          maxLength={8}
+          value={pin}
+          onChange={(e) => { setPin(e.target.value.replace(/\D/g, "")); setError(""); }}
+          placeholder={isEnabled ? "New PIN (4-8 digits)" : "PIN (4-8 digits)"}
+          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-center font-mono tracking-widest text-lg dark:border-gray-600 dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        />
+        <input
+          type="password"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          maxLength={8}
+          value={confirmPin}
+          onChange={(e) => { setConfirmPin(e.target.value.replace(/\D/g, "")); setError(""); }}
+          placeholder="Confirm PIN"
+          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-center font-mono tracking-widest text-lg dark:border-gray-600 dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        />
+        {pin && confirmPin && pin !== confirmPin && (
+          <p className="text-xs text-red-500">PINs don't match</p>
+        )}
+        {error && <p className="text-xs text-red-500">{error}</p>}
+      </div>
+
+      <div className="mt-4 flex gap-2">
+        <button
+          onClick={() => setPinMutation.mutate()}
+          disabled={!canSave || setPinMutation.isPending}
+          className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+        >
+          {setPinMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <LockKeyhole className="h-4 w-4" />}
+          {isEnabled ? "Change PIN" : "Set PIN"}
+        </button>
+        {isEnabled && (
+          <button
+            onClick={() => disable.mutate()}
+            disabled={disable.isPending}
+            className="flex items-center gap-2 rounded-xl border border-red-200 px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-800 dark:hover:bg-red-900/20"
+          >
+            {disable.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+            Disable
+          </button>
+        )}
+      </div>
     </div>
   );
 }

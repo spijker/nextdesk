@@ -44,6 +44,11 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
       className="fixed z-[9999] min-w-[180px] rounded-xl border border-white/10 bg-gray-900/95 py-1 shadow-2xl backdrop-blur-xl"
       style={{ left, top }}
       onContextMenu={(e) => e.preventDefault()}
+      // Without this, a mousedown on an item bubbles to any ancestor
+      // "close on outside click" handler (e.g. Desktop's own onMouseDown)
+      // before the click fires, unmounting the menu and swallowing the
+      // click — the button is visibly there but nothing happens.
+      onMouseDown={(e) => e.stopPropagation()}
     >
       {items.map((item, i) =>
         item.divider ? (

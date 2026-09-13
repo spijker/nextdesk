@@ -7,6 +7,7 @@ export interface User {
   auth_source: string;
   preferences: Record<string, unknown>;
   totp_enabled: boolean;
+  lock_pin_enabled?: boolean;
   nc_connected?: boolean;
   // DLP/security flags resolved from group policy (server also enforces)
   policies?: {
@@ -14,6 +15,7 @@ export interface User {
     disable_download?: boolean;
     disable_upload?: boolean;
     disable_clipboard?: boolean;
+    force_simple_layout?: boolean;
   };
 }
 
@@ -33,6 +35,7 @@ export interface App {
   container_image: string | null;
   web_url: string | null;
   mount_home: boolean;
+  env_json?: Record<string, string>;
   is_enabled: boolean;
   is_vpn?: boolean;
   // App may keep running in the background when the user opted in (Terminal)

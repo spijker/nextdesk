@@ -132,6 +132,8 @@ export default function AdminUsers() {
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [setPassUser, setSetPassUser] = useState<AdminUser | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkPending, setBulkPending] = useState(false);
 
   const { data: users = [] } = useQuery<AdminUser[]>({
     queryKey: ["admin", "users"],
@@ -172,6 +174,28 @@ export default function AdminUsers() {
       u.username.toLowerCase().includes(search.toLowerCase())
   );
 
+  const toggleOne = (id: string) => setSelected((s) => {
+    const next = new Set(s);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+  const allFilteredSelected = filtered.length > 0 && filtered.every((u) => selected.has(u.id));
+  const toggleAll = () => setSelected(allFilteredSelected ? new Set() : new Set(filtered.map((u) => u.id)));
+
+  const bulk = async (fn: (id: string) => Promise<any>, confirmMsg?: string) => {
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
+    const ids = [...selected];
+    setBulkPending(true);
+    const results = await Promise.allSettled(ids.map(fn));
+    setBulkPending(false);
+    setSelected(new Set());
+    qc.invalidateQueries({ queryKey: ["admin", "users"] });
+    const failed = results.filter((r) => r.status === "rejected").length;
+    failed
+      ? toast.error(`${ids.length - failed}/${ids.length} succeeded — ${failed} failed`)
+      : toast.success(`Done for ${ids.length} user${ids.length === 1 ? "" : "s"}`);
+  };
+
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
@@ -193,20 +217,53 @@ export default function AdminUsers() {
         </div>
       </div>
 
-      <div className="mb-4 relative w-64">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search users…"
-          className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-9 pr-4 text-sm shadow-sm focus:border-brand-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800"
-        />
+      <div className="mb-4 flex items-center gap-3">
+        <div className="relative w-64">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search users…"
+            className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-9 pr-4 text-sm shadow-sm focus:border-brand-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800"
+          />
+        </div>
+        {selected.size > 0 && (
+          <div className="flex flex-1 flex-wrap items-center gap-2 rounded-xl border border-brand-200 bg-brand-50 px-3 py-2 text-sm dark:border-brand-500/30 dark:bg-brand-500/10">
+            <span className="font-medium">{selected.size} selected</span>
+            <button disabled={bulkPending} onClick={() => bulk((id) => client.put(`/api/admin/users/${id}`, { is_active: false }), `Disable ${selected.size} user(s)?`)}
+              className="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800">
+              Disable
+            </button>
+            <button disabled={bulkPending} onClick={() => bulk((id) => client.put(`/api/admin/users/${id}`, { is_active: true }))}
+              className="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800">
+              Enable
+            </button>
+            <button disabled={bulkPending} onClick={() => bulk((id) => client.post(`/api/admin/users/${id}/force-logout`))}
+              className="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800">
+              Force logout
+            </button>
+            <button disabled={bulkPending} onClick={() => bulk((id) => client.post(`/api/admin/users/${id}/stop-sessions`), `Stop all running desktops for ${selected.size} user(s)?`)}
+              className="rounded-lg border border-orange-300 px-2.5 py-1 text-xs text-orange-600 hover:bg-orange-50 disabled:opacity-50 dark:border-orange-500/40 dark:hover:bg-orange-500/10">
+              Stop desktops
+            </button>
+            <button disabled={bulkPending} onClick={() => bulk((id) => client.delete(`/api/admin/users/${id}`), `Delete ${selected.size} user(s)? This stops their desktops and cannot be undone.`)}
+              className="rounded-lg border border-red-300 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-500/40 dark:hover:bg-red-500/10">
+              Delete
+            </button>
+            <button onClick={() => setSelected(new Set())} className="ml-auto text-xs text-gray-400 hover:text-gray-600">
+              Clear
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-gray-200 dark:border-gray-700">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 dark:bg-gray-800">
             <tr>
+              <th className="w-10 px-4 py-3">
+                <input type="checkbox" checked={allFilteredSelected} onChange={toggleAll} className="h-4 w-4" />
+              </th>
               {["Name", "Email", "Auth", "Status", "Admin", "Actions"].map((h) => (
                 <th key={h} className="px-4 py-3 text-left font-medium text-gray-500">{h}</th>
               ))}
@@ -215,6 +272,9 @@ export default function AdminUsers() {
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
             {filtered.map((u) => (
               <tr key={u.id} className="bg-white dark:bg-gray-900">
+                <td className="px-4 py-3">
+                  <input type="checkbox" checked={selected.has(u.id)} onChange={() => toggleOne(u.id)} className="h-4 w-4" />
+                </td>
                 <td className="px-4 py-3 font-medium">{u.display_name || u.username}</td>
                 <td className="px-4 py-3 text-gray-500">{u.email}</td>
                 <td className="px-4 py-3">

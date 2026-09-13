@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { LayoutGrid, Maximize, Minimize, LogOut, Layers, ClipboardCheck, ShieldCheck } from "lucide-react";
+import { LayoutGrid, Maximize, Minimize, LogOut, Layers, ClipboardCheck, ShieldCheck, LockKeyhole, Square } from "lucide-react";
 import { ClipboardManager } from "./ClipboardManager";
 import { NextcloudHub } from "./NextcloudHub";
 import { NcAvatar } from "./NcAvatar";
@@ -28,7 +28,7 @@ function Clock() {
   );
 }
 
-function FullscreenButton() {
+export function FullscreenButton() {
   const [full, setFull] = useState(!!document.fullscreenElement);
   useEffect(() => {
     const h = () => setFull(!!document.fullscreenElement);
@@ -177,7 +177,7 @@ function NcHelpDialog({ onClose }: { onClose(): void }) {
   );
 }
 
-function LogoutDialog({ onClose }: { onClose(): void }) {
+export function LogoutDialog({ onClose }: { onClose(): void }) {
   const windows = useDesktopStore((s) => s.windows);
   const activeSessions = windows.length;
   const [remember, setRemember] = useState(false);
@@ -359,7 +359,7 @@ export function Taskbar({ onExposeOpen }: TaskbarProps) {
     windows, launcherOpen, setLauncherOpen,
     focusWindow, minimizeWindow, closeWindow,
     profileOpen, setProfileOpen,
-    maxZ,
+    maxZ, setLocked,
     workspaces, activeWorkspace, switchWorkspace, moveWindowToWorkspace,
   } = useDesktopStore();
   const { user } = useAuthStore();
@@ -487,6 +487,15 @@ export function Taskbar({ onExposeOpen }: TaskbarProps) {
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white/60 hover:bg-white/10 hover:text-white transition-colors"
         >
           <Layers className="h-4 w-4" />
+        </button>
+
+        {/* Show desktop — minimizes everything on this workspace, or restores it all */}
+        <button
+          onClick={() => useDesktopStore.getState().showDesktop()}
+          title="Show desktop (Super+D)"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white/60 hover:bg-white/10 hover:text-white transition-colors"
+        >
+          <Square className="h-3.5 w-3.5" />
         </button>
 
         <div className="mx-1 h-5 w-px bg-white/10" />
@@ -626,6 +635,15 @@ export function Taskbar({ onExposeOpen }: TaskbarProps) {
           <Clock />
           <div className="mx-1 h-5 w-px bg-white/10" />
           <FullscreenButton />
+          {user?.lock_pin_enabled && (
+            <button
+              onClick={() => setLocked(true)}
+              title="Lock now"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white/60 hover:bg-white/10 hover:text-white transition-colors"
+            >
+              <LockKeyhole className="h-4 w-4" />
+            </button>
+          )}
           <button
             onClick={handleLogoutClick}
             title="Log out"

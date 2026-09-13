@@ -188,6 +188,24 @@ async def delete_recording(
     return {"ok": True}
 
 
+@router.get("/{session_id}/thumbnail")
+async def get_session_thumbnail(
+    session_id: uuid.UUID,
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+):
+    """Best-effort live preview — see routers/sessions.py's uploader. 404 means
+    none captured yet (session just started, or the window's never been focused)."""
+    result = await db.execute(select(Session).where(Session.id == session_id))
+    sess = result.scalar_one_or_none()
+    if not sess or not sess.thumbnail:
+        raise HTTPException(status_code=404, detail="No thumbnail yet")
+    return {
+        "data_url": sess.thumbnail,
+        "updated_at": sess.thumbnail_updated_at.isoformat() if sess.thumbnail_updated_at else None,
+    }
+
+
 @router.delete("/{session_id}")
 async def force_kill_session(
     session_id: uuid.UUID,

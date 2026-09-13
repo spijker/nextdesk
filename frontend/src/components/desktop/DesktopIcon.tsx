@@ -6,13 +6,15 @@ import client from "@/api/client";
 import type { App, Session } from "@/types";
 import { useDesktopStore, type PinnedItem } from "@/store/desktop";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
+import { cn } from "@/lib/utils";
 
 interface Props {
   item: PinnedItem;
   apps: App[];
+  selected?: boolean;
 }
 
-export function DesktopIcon({ item, apps }: Props) {
+export function DesktopIcon({ item, apps, selected }: Props) {
   const [ctx, setCtx] = useState<{ x: number; y: number } | null>(null);
   const [pressed, setPressed] = useState(false);
   const navigate = useNavigate();
@@ -81,6 +83,7 @@ export function DesktopIcon({ item, apps }: Props) {
   return (
     <>
       <button
+        data-desktop-icon={item.id}
         onClick={activate}
         onMouseDown={() => setPressed(true)}
         onMouseUp={() => setPressed(false)}
@@ -88,7 +91,10 @@ export function DesktopIcon({ item, apps }: Props) {
         onContextMenu={handleContextMenu}
         disabled={pending}
         style={{ width: 80 }}
-        className="group flex flex-col items-center gap-1.5 rounded-xl p-2 transition-colors hover:bg-white/10 active:bg-white/20 disabled:cursor-default"
+        className={cn(
+          "group flex flex-col items-center gap-1.5 rounded-xl p-2 transition-colors hover:bg-white/10 active:bg-white/20 disabled:cursor-default",
+          selected && "bg-indigo-500/25 ring-1 ring-indigo-400/60",
+        )}
       >
         <div
           className="relative flex h-14 w-14 items-center justify-center rounded-xl text-4xl shadow-lg transition-transform duration-100"

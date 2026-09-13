@@ -40,6 +40,7 @@ export interface AppWindow {
   zIndex: number;
   minimized: boolean;
   maximized: boolean;
+  alwaysOnTop: boolean;
   workspace: string;
   suspended: boolean;
   muted: boolean;
@@ -75,6 +76,10 @@ interface DesktopStore {
   // their iframe so a session frame can't swallow the mouse mid-interaction.
   interacting: boolean;
   setInteracting(v: boolean): void;
+  // Idle lock screen (Profile → Security). Only ever set true when the user
+  // has a PIN configured — see Desktop.tsx's onIdle.
+  locked: boolean;
+  setLocked(v: boolean): void;
   launcherOpen: boolean;
   adminOpen: boolean;
   storageOpen: boolean;
@@ -97,6 +102,10 @@ interface DesktopStore {
   // Appearance
   theme: "dark" | "light" | "system";
   desktopLayout: "icons" | "tiles" | "clean";
+  // Self-service choice — "simple" hides the taskbar/launcher/window-mgmt
+  // chrome (Files + app tiles only). A group's force_simple_layout policy
+  // (see Desktop.tsx) overrides this regardless of what's stored here.
+  layoutMode: "desktop" | "simple";
   // Shared clipboard history (most-recent first) — bridges copy/paste between
   // session apps. Persisted to localStorage only, never synced to the server.
   clipboardHistory: string[];
@@ -115,6 +124,10 @@ interface DesktopStore {
   focusWindow(windowId: string): void;
   minimizeWindow(windowId: string): void;
   toggleMaximize(windowId: string): void;
+  // Minimizes every window on the active workspace, or restores them all if
+  // they're already all minimized (classic taskbar-corner "show desktop").
+  showDesktop(): void;
+  toggleAlwaysOnTop(windowId: string): void;
   toggleMute(windowId: string): void;
   setVolume(windowId: string, volume: number): void;
   updateBounds(windowId: string, x: number, y: number, w: number, h: number): void;
@@ -144,6 +157,7 @@ interface DesktopStore {
   setWallpaper(value: string): void;
   setTheme(t: "dark" | "light" | "system"): void;
   setDesktopLayout(l: "icons" | "tiles" | "clean"): void;
+  setLayoutMode(m: "desktop" | "simple"): void;
   addClip(text: string): void;
   clearClips(): void;
   mergeClips(list: string[]): void;
@@ -174,6 +188,8 @@ export const useDesktopStore = create<DesktopStore>()(
       setDetached: (v) => set({ detached: v }),
       interacting: false,
       setInteracting: (v) => set({ interacting: v }),
+      locked: false,
+      setLocked: (v) => set({ locked: v }),
       launcherOpen: false,
       adminOpen: false,
       storageOpen: false,
@@ -190,6 +206,7 @@ export const useDesktopStore = create<DesktopStore>()(
       wallpaper: "",
       theme: "dark",
       desktopLayout: "icons",
+      layoutMode: "desktop",
       clipboardHistory: [],
       workspaces: ["1", "2", "3", "4"],
       activeWorkspace: "1",
@@ -237,6 +254,7 @@ export const useDesktopStore = create<DesktopStore>()(
             zIndex: nextZ,
             minimized: false,
             maximized: false,
+            alwaysOnTop: false,
             workspace: s.activeWorkspace,
             suspended: false,
             muted: true,
@@ -263,6 +281,26 @@ export const useDesktopStore = create<DesktopStore>()(
         set((s) => ({
           windows: s.windows.map((w) =>
             w.windowId === windowId ? { ...w, minimized: true } : w
+          ),
+        }));
+      },
+
+      showDesktop() {
+        set((s) => {
+          const onWorkspace = s.windows.filter((w) => w.workspace === s.activeWorkspace);
+          const anyVisible = onWorkspace.some((w) => !w.minimized);
+          return {
+            windows: s.windows.map((w) =>
+              w.workspace === s.activeWorkspace ? { ...w, minimized: anyVisible } : w
+            ),
+          };
+        });
+      },
+
+      toggleAlwaysOnTop(windowId) {
+        set((s) => ({
+          windows: s.windows.map((w) =>
+            w.windowId === windowId ? { ...w, alwaysOnTop: !w.alwaysOnTop } : w
           ),
         }));
       },
@@ -351,6 +389,7 @@ export const useDesktopStore = create<DesktopStore>()(
             zIndex: ++maxZ,
             minimized: sess.window_state?.minimized ?? false,
             maximized: sess.window_state?.maximized ?? false,
+            alwaysOnTop: false,
             workspace: "1",
             suspended: sess.status === "suspended",
             muted: true,
@@ -452,6 +491,10 @@ export const useDesktopStore = create<DesktopStore>()(
         set({ desktopLayout: l });
         savePrefDebounced({ desktopLayout: l });
       },
+      setLayoutMode(m) {
+        set({ layoutMode: m });
+        savePrefDebounced({ layoutMode: m });
+      },
 
       addClip(text) {
         const t = text.replace(/\r/g, "");
@@ -497,6 +540,7 @@ export const useDesktopStore = create<DesktopStore>()(
         if (prefs.wallpaper          !== undefined) patch.wallpaper          = prefs.wallpaper          as string;
         if (prefs.theme              !== undefined) patch.theme              = prefs.theme              as "dark" | "light" | "system";
         if (prefs.desktopLayout      !== undefined) patch.desktopLayout      = prefs.desktopLayout      as "icons" | "tiles" | "clean";
+        if (prefs.layoutMode         !== undefined) patch.layoutMode         = prefs.layoutMode         as "desktop" | "simple";
         if (prefs.fileManagerViewMode !== undefined) patch.fileManagerViewMode = prefs.fileManagerViewMode as "grid" | "list";
         if (Array.isArray(prefs.pinned))       patch.pinned        = prefs.pinned        as PinnedItem[];
         if (Array.isArray(prefs.quickLaunch))  patch.quickLaunch   = prefs.quickLaunch   as string[];
@@ -511,7 +555,7 @@ export const useDesktopStore = create<DesktopStore>()(
       partialize: (s) => ({
         pinned: s.pinned, quickLaunch: s.quickLaunch,
         favorites: s.favorites, recentApps: s.recentApps,
-        wallpaper: s.wallpaper, theme: s.theme, desktopLayout: s.desktopLayout,
+        wallpaper: s.wallpaper, theme: s.theme, desktopLayout: s.desktopLayout, layoutMode: s.layoutMode,
         fileManagerViewMode: s.fileManagerViewMode,
         clipboardHistory: s.clipboardHistory,
         workspaces: s.workspaces, activeWorkspace: s.activeWorkspace,

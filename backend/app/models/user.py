@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,6 +34,13 @@ class User(Base, UUIDMixin, TimestampMixin):
     totp_secret_enc: Mapped[str | None] = mapped_column(String(500), nullable=True)
     totp_pending_enc: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # Idle lock screen PIN (bcrypt hash) — independent of the account password/
+    # OIDC login, since the lock screen just re-gates an already-authenticated
+    # browser tab rather than a full re-auth. Null = idle lock disabled.
+    lock_pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    lock_pin_fail_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    lock_pin_locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Per-user Nextcloud override (null = use system default from settings)
     nc_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     nc_username: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -57,7 +65,8 @@ class Group(Base, UUIDMixin, TimestampMixin):
 
     # Security/compliance policy flags — most restrictive across a user's
     # groups wins (any group setting a flag applies it). Known keys:
-    # record_sessions, disable_download, disable_upload, disable_clipboard.
+    # record_sessions, disable_download, disable_upload, disable_clipboard,
+    # force_simple_layout. See services/policy.py.
     policies: Mapped[dict] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=dict, server_default="{}")
 
     members: Mapped[list["UserGroup"]] = relationship(back_populates="group", cascade="all, delete-orphan")
