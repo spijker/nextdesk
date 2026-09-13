@@ -1,5 +1,7 @@
+import re
 import uuid
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +12,41 @@ from app.models.app_catalog import App, AppPermission
 from app.models.user import User
 
 router = APIRouter(prefix="/api/admin/apps", tags=["admin-apps"])
+
+FLATHUB_TIMEOUT = 10
+FLATPAK_APP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*(\.[A-Za-z0-9][A-Za-z0-9_-]*)+$")
+
+
+@router.get("/flatpak/lookup")
+async def flatpak_lookup(
+    app_id: str,
+    _: User = Depends(require_role(["admin"])),
+):
+    """Fetch name/summary/icon for a Flathub app id, so the admin only has to
+    paste the id (e.g. org.videolan.VLC) when adding a Flatpak app. Proxied
+    server-side so the admin's browser doesn't need to reach flathub.org."""
+    app_id = app_id.strip()
+    if not FLATPAK_APP_ID_RE.match(app_id):
+        raise HTTPException(status_code=422, detail="That doesn't look like a Flatpak app ID (e.g. org.videolan.VLC)")
+
+    async with httpx.AsyncClient(timeout=FLATHUB_TIMEOUT) as c:
+        try:
+            resp = await c.get(f"https://flathub.org/api/v2/appstream/{app_id}")
+        except httpx.HTTPError:
+            raise HTTPException(status_code=502, detail="Couldn't reach Flathub")
+
+    if resp.status_code == 404:
+        raise HTTPException(status_code=404, detail=f"'{app_id}' isn't on Flathub")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="Flathub lookup failed")
+
+    data = resp.json()
+    return {
+        "app_id": app_id,
+        "name": data.get("name") or app_id,
+        "summary": data.get("summary") or "",
+        "icon_url": data.get("icon") or "",
+    }
 
 
 @router.get("")

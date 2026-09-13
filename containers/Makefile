@@ -10,9 +10,9 @@ TAG        ?= latest
 
 _pfx = $(if $(REGISTRY),$(REGISTRY)/,)
 
-.PHONY: all base web-base vivaldi firefox thunderbird libreoffice terminator terminal kiosk sshpilot vscodium filezilla headlamp remmina ferdium htop jupyterlab pgweb opencode vpn push
+.PHONY: all base web-base vivaldi firefox thunderbird libreoffice terminator terminal kiosk sshpilot vscodium filezilla headlamp remmina ferdium htop jupyterlab pgweb opencode flatpak vpn push
 
-all: base vivaldi firefox thunderbird libreoffice terminator terminal kiosk sshpilot vscodium filezilla headlamp remmina ferdium htop jupyterlab pgweb opencode vpn
+all: base vivaldi firefox thunderbird libreoffice terminator terminal kiosk sshpilot vscodium filezilla headlamp remmina ferdium htop jupyterlab pgweb opencode flatpak vpn
 
 base:
 	docker build -t $(_pfx)lwp-kasm-base:$(TAG) kasm-base/
@@ -71,6 +71,9 @@ pgweb: web-base
 opencode: base
 	docker build -t $(_pfx)lwp-opencode:$(TAG) opencode/
 
+flatpak: base
+	docker build -t $(_pfx)lwp-flatpak:$(TAG) flatpak/
+
 vpn:
 	docker build -t $(_pfx)lwp-vpn:$(TAG) vpn/
 
@@ -93,4 +96,5 @@ push:
 	docker push $(_pfx)lwp-jupyterlab:$(TAG)
 	docker push $(_pfx)lwp-pgweb:$(TAG)
 	docker push $(_pfx)lwp-opencode:$(TAG)
+	docker push $(_pfx)lwp-flatpak:$(TAG)
 	docker push $(_pfx)lwp-vpn:$(TAG)

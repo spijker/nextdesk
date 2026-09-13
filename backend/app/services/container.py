@@ -80,6 +80,7 @@ async def start(
     mount_home: bool,
     env_json: dict,
     needs_fuse: bool = False,
+    needs_userns: bool = False,
 ) -> str:
     """Launch a container for a session. Returns the upstream host:port string."""
     if settings.is_dev:
@@ -95,6 +96,7 @@ async def start(
             env_json=env_json,
             mount_home=mount_home,
             needs_fuse=needs_fuse,
+            needs_userns=needs_userns,
         )
     else:
         return await _k8s_start(
@@ -113,6 +115,7 @@ async def start(
             mount_home=mount_home,
             env_json=env_json,
             needs_fuse=needs_fuse,
+            needs_userns=needs_userns,
         )
 
 
@@ -141,7 +144,7 @@ async def resume(pod_name: str, service_name: str) -> None:
 
 async def _docker_start(
     *, pod_name, session_token, app_type, container_image, proxy_port, shm_size,
-    username, user_id, env_json, mount_home, needs_fuse=False,
+    username, user_id, env_json, mount_home, needs_fuse=False, needs_userns=False,
 ) -> str:
     return await asyncio.to_thread(
         _docker_start_sync,
@@ -156,12 +159,13 @@ async def _docker_start(
         env_json=env_json,
         mount_home=mount_home,
         needs_fuse=needs_fuse,
+        needs_userns=needs_userns,
     )
 
 
 def _docker_start_sync(
     *, pod_name, session_token, app_type, container_image, proxy_port, shm_size,
-    username, user_id, env_json, mount_home, needs_fuse=False,
+    username, user_id, env_json, mount_home, needs_fuse=False, needs_userns=False,
 ) -> str:
     import docker
     client = docker.from_env()
@@ -228,32 +232,60 @@ def _docker_start_sync(
     devices = []
     cap_add = []
     security_opt = []
+    unmask_proc = False
     if needs_fuse:
         devices = ["/dev/fuse:/dev/fuse:rwm"]
         cap_add = ["SYS_ADMIN"]
-        security_opt = ["apparmor:unconfined"]
+        security_opt.append("apparmor:unconfined")
+    if needs_userns:
+        # Flatpak's bwrap sandbox creates its own user+pid+mount namespace and
+        # mounts a fresh /proc inside it. Unlike the FUSE case above this needs
+        # no extra capability (bwrap is root within its own namespace), but it
+        # does need syscalls Docker's default seccomp profile blocks (mount/
+        # unshare), and Docker's default-masked /proc paths unmasked —
+        # verified empirically: cap_add alone 403s on "pivot_root", seccomp+
+        # apparmor unconfined gets bwrap started but "flatpak run" still 403s
+        # mounting /proc until MaskedPaths/ReadonlyPaths are cleared too.
+        security_opt.append("seccomp=unconfined")
+        if "apparmor:unconfined" not in security_opt:
+            security_opt.append("apparmor:unconfined")
+        unmask_proc = True
 
-    container = client.containers.run(
-        image=container_image,
-        name=pod_name,
-        detach=True,
-        network=network,
-        environment=env,
-        volumes=volumes or None,
+    # containers.run()'s security_opt has no way to unmask /proc — the CLI's
+    # `--security-opt systempaths=unconfined` isn't a real SecurityOpt value,
+    # it's a client-side shorthand the `docker` CLI expands into the
+    # HostConfig fields below before sending; passed straight through the SDK
+    # the daemon rejects the whole create-container call. So build the host
+    # config ourselves instead of going through containers.run().
+    api = client.api
+    host_config = api.create_host_config(
+        network_mode=network,
+        binds=volumes or None,
         shm_size=shm_bytes,
         devices=devices or None,
         cap_add=cap_add or None,
         security_opt=security_opt or None,
-        remove=False,
+    )
+    if unmask_proc:
+        host_config["MaskedPaths"] = []
+        host_config["ReadonlyPaths"] = []
+
+    created = api.create_container(
+        image=container_image,
+        name=pod_name,
+        environment=env,
+        volumes=[v["bind"] for v in volumes.values()] if volumes else None,
         labels={
             "lwp.managed": "true",
             "lwp.session": pod_name,
             "lwp.user": user_id,
             **({"lwp.vpn": "gateway"} if is_vpn_gateway else {}),
         },
+        host_config=host_config,
     )
+    api.start(container=created["Id"])
     if vpn_net is not None:
-        vpn_net.connect(container, aliases=["vpn"] if is_vpn_gateway else None)
+        vpn_net.connect(pod_name, aliases=["vpn"] if is_vpn_gateway else None)
         if is_vpn_gateway:
             # Late join: sessions already running when the gateway starts can
             # reach vpn:1080 too (proxy env can't be injected retroactively —
@@ -322,7 +354,7 @@ def _docker_resume_sync(pod_name: str) -> None:
 async def _k8s_start(
     *, session_id, session_token, pod_name, service_name, app_type,
     container_image, proxy_port, cpu_limit, mem_limit, shm_size,
-    user_id, username, mount_home, env_json, needs_fuse=False,
+    user_id, username, mount_home, env_json, needs_fuse=False, needs_userns=False,
 ) -> str:
     from kubernetes_asyncio import client as k8s
     from kubernetes_asyncio import config as k8s_config
@@ -416,7 +448,11 @@ async def _k8s_start(
             requests={"cpu": "100m", "memory": "256Mi"},
         ),
         volume_mounts=volume_mounts,
-        security_context=k8s.V1SecurityContext(privileged=True) if needs_fuse else None,
+        # K8s security contexts don't expose Docker's per-flag seccomp/apparmor/
+        # systempaths knobs without a custom SCC/seccomp profile, so flatpak's
+        # bwrap sandbox (needs_userns) gets the same full-privileged grant as
+        # the FUSE mount case for now.
+        security_context=k8s.V1SecurityContext(privileged=True) if (needs_fuse or needs_userns) else None,
         # startup probe polls every 1s so the pod goes Ready the moment the port
         # opens (instead of waiting for readiness' 5s initial delay); 60s grace.
         startup_probe=k8s.V1Probe(
