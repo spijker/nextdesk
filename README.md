@@ -13,6 +13,7 @@ A browser-based remote desktop — a Kasm alternative built on a custom VNC stac
 **What you can do with it:**
 - Spin up disposable Linux desktops or single apps (browser, office suite, terminal, IDE, …) per user, no client install
 - Give every session instant access to a Nextcloud account — files, calendar, tasks, chat — mounted or embedded directly
+- Embed the whole thing *inside* Nextcloud itself — a full Linux desktop, right in your Nextcloud nav bar. See [Embedding in Nextcloud](#embedding-in-nextcloud) below.
 - Add your own app images and roll them out through an admin-managed catalog
 - Run it behind your own SSO (OIDC/LDAP/local) and your own TLS, on Docker Compose for a quick try or Kubernetes for a real deployment
 
@@ -101,7 +102,7 @@ First user to log in automatically becomes admin.
   - **Notifications** — dismiss / clear all (with a taskbar unread badge).
 - **Extra mounts (SFTP / S3)** — users add their own remotes in Profile (SFTP with private key **or** username/password; S3 with access keys); rclone-mounted at `~/Mount/<name>` in every session, credentials stored Fernet-encrypted.
 - **Persistent home** — Docker named volume / K8s PVC per user survives session restarts.
-- **Nextcloud custom app** (`nextcloud-app/nextdesk/`) — adds a Nextdesk entry to Nextcloud's own navigation bar, embedding Nextdesk in an iframe so users never leave Nextcloud. Admin sets the URL from Nextcloud's Settings UI. See [docs/nextcloud-app.md](docs/nextcloud-app.md).
+- **Nextcloud custom app** (`nextcloud-app/nextdesk/`) — adds a Nextdesk entry to Nextcloud's own navigation bar, embedding Nextdesk in an iframe so users never leave Nextcloud. Admin sets the URL from Nextcloud's Settings UI. See [Embedding in Nextcloud](#embedding-in-nextcloud) and [docs/nextcloud-app.md](docs/nextcloud-app.md).
 
 ### Clipboard
 - **Shared desktop clipboard** — bridges copy/paste across session apps (each app is its own container), VNC and web-native alike:
@@ -150,6 +151,12 @@ First user to log in automatically becomes admin.
 - **Session bandwidth** — nginx logs per-session bytes → **mtail** sidecar (`:3903/metrics`) exports `nginx_session_bytes_{sent,received}_total`; importable Grafana dashboard in `docs/grafana-dashboard.json`
 - **SIEM/syslog** — forward audit events (Admin → Settings → Security); **login lockout + IP allow/deny**
 - **K8s hardening** — PodDisruptionBudgets, nightly `pg_dump` CronJob (7-day retention), session-pod probes, orphaned-PVC cleanup
+
+### Embedding in Nextcloud
+
+Nextdesk also works **embedded directly inside your Nextcloud environment** — a full Linux desktop, right there in Nextcloud's own navigation bar. 🖥️✨
+
+Install the bundled Nextcloud custom app (`nextcloud-app/nextdesk/`), point it at your Nextdesk URL, and users get a "Nextdesk" entry alongside Files/Calendar/Talk — click it and their desktop (or app) loads in an iframe without ever leaving Nextcloud. Login is seamless when both share the same OIDC provider (auto-mounts their Nextcloud storage too), fullscreen escapes the iframe cleanly, and it just works as if the desktop were a native Nextcloud app. See [docs/nextcloud-app.md](docs/nextcloud-app.md) for setup.
 
 ## Makefile targets
 
