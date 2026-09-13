@@ -1,0 +1,121 @@
+# Nextcloud custom app
+
+`nextcloud-app/nextdesk/` is a real Nextcloud app (PHP, follows the standard
+`info.xml` / `IBootstrap` app framework) that adds a **Nextdesk** entry to
+Nextcloud's top navigation bar. Clicking it opens a Nextcloud page with an
+iframe embedding your Nextdesk instance — so users can reach their desktop
+sessions without leaving Nextcloud.
+
+This is separate from [OIDC auth](auth-setup.md#nextcloud-recommended--same-instance-as-your-storage):
+the app is about *navigation and embedding*, not identity. You'll typically
+want both — Nextcloud as the OIDC provider so login is seamless, and this app
+so users never have to know Nextdesk's URL.
+
+---
+
+## How it works
+
+- The app adds one nav entry (`appinfo/info.xml` → `<navigations>`) that
+  routes to `PageController::index()`.
+- That controller reads an admin-configured URL from Nextcloud's app config
+  (`IConfig::getAppValue`) and renders `templates/index.php`, which puts that
+  URL in an `<iframe>`.
+- It also adds a `ContentSecurityPolicy::addAllowedFrameDomain()` entry for
+  the configured origin, so Nextcloud's own CSP doesn't block the iframe.
+- An admin settings page (Settings → Administration → Nextdesk) lets an admin
+  set/change the URL without touching config files, via
+  `lib/Settings/Admin.php` + `lib/Controller/SettingsController.php`
+  (`IGroupManager::isAdmin()` gated).
+
+No Nextdesk-side code depends on this app existing — it's a pure Nextcloud-side
+add-on. If you don't install it, users just bookmark/navigate to Nextdesk directly.
+
+---
+
+## Installing
+
+1. Copy `nextcloud-app/nextdesk/` into your Nextcloud's `custom_apps/`
+   directory (or `apps/` — either is a valid Nextcloud app location) as
+   `custom_apps/nextdesk/`. Make sure it's readable by the web server user
+   (`www-data` in most Nextcloud deployments).
+2. Settings → Administration → Apps → enable **Nextdesk** (or
+   `occ app:enable nextdesk`).
+3. Settings → Administration → **Nextdesk** → set the **Nextdesk URL** to
+   your instance's public URL (e.g. `https://desk.example.com`) → Save.
+4. See [nginx: allow framing](#nginx-allow-framing-from-nextcloud) below —
+   without it the iframe loads a blank page.
+
+A **Nextdesk** icon now appears in Nextcloud's app navigation for all users.
+
+---
+
+## nginx: allow framing from Nextcloud
+
+Nextdesk's nginx config blocks being framed by other origins by default
+(`X-Frame-Options` / CSP `frame-ancestors`, both set to `'self'`). Since
+Nextcloud is a different origin, embedding it in an iframe needs that opened
+up explicitly. In `nginx/prod.conf` (and `nginx/dev.conf` for local testing),
+find the `frame-ancestors` directive in the `Content-Security-Policy` header
+and add your Nextcloud origin:
+
+```nginx
+add_header Content-Security-Policy "... frame-ancestors 'self' https://cloud.example.com;" always;
+```
+
+`X-Frame-Options` isn't used for this because it can't express "allow this
+one other origin" — only `DENY`, `SAMEORIGIN`, or the deprecated/unreliable
+`ALLOW-FROM`. `frame-ancestors` is the modern CSP replacement and is what all
+current browsers actually enforce for this case.
+
+---
+
+## Third-party cookie caveat
+
+The iframe puts Nextdesk's origin inside a page served from Nextcloud's
+origin — from the browser's point of view, Nextdesk is now a **third-party
+context**. If Nextdesk's own session cookie is not marked in a way browsers
+treat as embeddable (`SameSite=None; Secure`), some browsers will block it
+inside the iframe:
+
+- **Safari (ITP)** and **Firefox (ETP strict)** block third-party cookies by
+  default in many configurations.
+- **Chrome** is phasing out third-party cookies entirely.
+
+Practical effect: a user might load the Nextdesk iframe and be asked to log
+in every time, even though they're already logged into Nextdesk in a normal
+tab, because the embedded context can't see that session's cookie.
+
+**Mitigations, in order of how much they actually fix vs. paper over the problem:**
+
+1. Serve Nextcloud and Nextdesk from the same **parent domain** (e.g.
+   `cloud.example.com` and `desk.example.com` both under `example.com`).
+   This doesn't make them the same origin, but some browsers' third-party
+   cookie heuristics are more lenient for same-site (registrable-domain)
+   embeds than fully cross-site ones — it is not a guarantee, only an
+   improvement.
+2. Set Nextdesk's session cookie with `SameSite=None; Secure` when serving
+   inside the iframe context, so browsers that *do* allow opted-in
+   third-party cookies accept it.
+3. If your users are on Safari or a hardened Firefox/Chrome profile, expect
+   the iframe to sometimes require a fresh login even with the above — this
+   is a browser policy, not a bug in this app. There is no fully reliable
+   fix that keeps the iframe approach; the alternative is a full-page
+   redirect into Nextdesk (same-origin navigation, no iframe, no
+   third-party-cookie exposure at all) if this becomes a real problem for
+   your users.
+
+Since Nextdesk itself is typically configured to use Nextcloud as its OIDC
+provider ([auth setup](auth-setup.md#nextcloud-recommended--same-instance-as-your-storage)),
+a blocked cookie shows up as: the iframe loads Nextdesk's login page, the
+user clicks "Sign in", completes OIDC against Nextcloud (already logged in
+there, so this is instant), and lands back in a working session — an extra
+click, not a broken flow, in the common case.
+
+---
+
+## Uninstalling
+
+Settings → Administration → Apps → disable **Nextdesk** (or
+`occ app:disable nextdesk`), then delete `custom_apps/nextdesk/`. This only
+removes the nav entry and embed page — it has no effect on Nextdesk itself or
+on any OIDC configuration between the two.

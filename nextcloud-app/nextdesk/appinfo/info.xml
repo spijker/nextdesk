@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+    <id>nextdesk</id>
+    <name>Nextdesk</name>
+    <summary>Your Nextdesk remote Linux desktop, embedded inside Nextcloud</summary>
+    <description><![CDATA[Adds a Nextdesk icon to the Nextcloud app menu that opens your
+Nextdesk remote-desktop instance inside Nextcloud's own page shell (via an
+iframe). Nextdesk must already be deployed separately and configured to
+accept this Nextcloud instance as its OIDC identity provider — see
+Nextdesk's own docs/auth-setup.md for that half of the setup, and this
+app's README for the Nextcloud-side wiring (admin URL + CSP/frame headers).
+
+Because the desktop is a third-party iframe, some browsers' third-party
+cookie restrictions (Safari ITP, Chrome's phase-out) can interfere with
+keeping the embedded session logged in — see the README before relying on
+this for end users on those browsers.]]></description>
+    <version>1.0.0</version>
+    <licence>agpl</licence>
+    <author>Nextdesk</author>
+    <namespace>Nextdesk</namespace>
+    <category>tools</category>
+    <website>https://github.com/phvos-lang/nextcloud-workspace</website>
+    <bugs>https://github.com/phvos-lang/nextcloud-workspace/issues</bugs>
+    <repository type="git">https://github.com/phvos-lang/nextcloud-workspace.git</repository>
+    <screenshot>https://raw.githubusercontent.com/phvos-lang/nextcloud-workspace/main/docs/workspace.png</screenshot>
+    <dependencies>
+        <nextcloud min-version="27" max-version="31"/>
+    </dependencies>
+    <navigations>
+        <navigation>
+            <name>Nextdesk</name>
+            <route>nextdesk.page.index</route>
+            <icon>app.png</icon>
+        </navigation>
+    </navigations>
+    <settings>
+        <admin>OCA\Nextdesk\Settings\Admin</admin>
+        <admin-section>OCA\Nextdesk\Settings\AdminSection</admin-section>
+    </settings>
+</info>

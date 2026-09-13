@@ -42,6 +42,7 @@ nav:
       - Catalog & adding apps: apps.md
       - Custom app images: custom-image.md
   - Auth setup: auth-setup.md
+  - Nextcloud custom app: nextcloud-app.md
   - VPN gateway: vpn.md
   - Deployment (Kubernetes): deployment-k8s.md
   - Thin clients (PXE kiosk, idea): thin-client-pxe.md
