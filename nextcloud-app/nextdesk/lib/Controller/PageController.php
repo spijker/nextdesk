@@ -39,7 +39,14 @@ class PageController extends Controller {
         // half (Nextdesk's nginx allowing *this* Nextcloud's origin to frame
         // it — X-Frame-Options/frame-ancestors) lives on the Nextdesk side,
         // see this app's README.
-        $csp = new ContentSecurityPolicy();
+        //
+        // Start from the policy TemplateResponse already attached (its
+        // normal default-src/script-src/etc. 'self' allowances for
+        // Nextcloud's own core assets) rather than a fresh, empty
+        // ContentSecurityPolicy — replacing it outright rather than
+        // extending it blocked Nextcloud's own JS from loading on this page
+        // entirely (default-src 'none').
+        $csp = $response->getContentSecurityPolicy() ?? new ContentSecurityPolicy();
         $origin = $this->originOf($url);
         if ($origin !== null) {
             $csp->addAllowedFrameDomain($origin);
@@ -52,7 +59,7 @@ class PageController extends Controller {
         // Feature-Policy header from an ancestor document can only restrict,
         // never be re-granted by a child. FeaturePolicy already defaults
         // fullscreen/autoplay to 'self', so just add Nextdesk's origin too.
-        $featurePolicy = new FeaturePolicy();
+        $featurePolicy = $response->getFeaturePolicy() ?? new FeaturePolicy();
         if ($origin !== null) {
             $featurePolicy->addAllowedFullScreenDomain($origin);
         }
