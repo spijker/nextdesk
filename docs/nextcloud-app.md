@@ -69,6 +69,28 @@ current browsers actually enforce for this case.
 
 ---
 
+## Fullscreen
+
+The iframe already has `allow="fullscreen"` and `allowfullscreen` set, but
+that alone isn't enough: Nextcloud sends its own `Feature-Policy` header on
+every page, restricting `fullscreen` to `'self'` by default. A
+`Feature-Policy`/`Permissions-Policy` header from an ancestor document can
+only ever *restrict* what a descendant frame may do — a child iframe's own
+`allow` attribute can't re-grant a feature the parent's policy header has
+already disallowed for that origin. Since Nextdesk's iframe `src` is a
+different origin than Nextcloud, `'self'` doesn't cover it, and the
+Fullscreen API would silently fail from inside the iframe.
+
+`PageController::index()` fixes this by setting a `FeaturePolicy` on the
+response with `addAllowedFullScreenDomain()` for the configured Nextdesk
+origin — no admin configuration needed, it's derived from the same URL
+already set in Settings → Administration → Nextdesk. Once fullscreen is
+requested inside the iframe (e.g. Nextdesk's own fullscreen button), it
+behaves like normal browser fullscreen — covering the whole screen, not
+just the iframe's box on the Nextcloud page.
+
+---
+
 ## Third-party cookie caveat
 
 The iframe puts Nextdesk's origin inside a page served from Nextcloud's

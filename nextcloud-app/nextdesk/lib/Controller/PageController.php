@@ -6,6 +6,7 @@ namespace OCA\Nextdesk\Controller;
 
 use OCP\AppFramework\Controller;
 use OCP\AppFramework\Http\ContentSecurityPolicy;
+use OCP\AppFramework\Http\FeaturePolicy;
 use OCP\AppFramework\Http\TemplateResponse;
 use OCP\IConfig;
 use OCP\IRequest;
@@ -44,6 +45,19 @@ class PageController extends Controller {
             $csp->addAllowedFrameDomain($origin);
         }
         $response->setContentSecurityPolicy($csp);
+
+        // Nextcloud's default Feature-Policy restricts fullscreen to 'self',
+        // which blocks the Fullscreen API for Nextdesk's iframe (cross-origin)
+        // regardless of the iframe's own allow="fullscreen" attribute — a
+        // Feature-Policy header from an ancestor document can only restrict,
+        // never be re-granted by a child. FeaturePolicy already defaults
+        // fullscreen/autoplay to 'self', so just add Nextdesk's origin too.
+        $featurePolicy = new FeaturePolicy();
+        if ($origin !== null) {
+            $featurePolicy->addAllowedFullScreenDomain($origin);
+        }
+        $response->setFeaturePolicy($featurePolicy);
+
         return $response;
     }
 
