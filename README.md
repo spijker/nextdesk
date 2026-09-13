@@ -2,7 +2,7 @@
   <img src="nextdesk.png" alt="Nextdesk" width="120" />
 </p>
 
-# Nextdesk (Nextcloud Linux Workspace — LWP)
+# Nextdesk (Nextcloud Linux Workspace)
 
 > **Proof of Concept.** This is a working POC, not a hardened production release — code and APIs may change without notice, and it hasn't had a full security audit. Everything below is implemented and runnable, but treat it as a demo/evaluation build.
 >
