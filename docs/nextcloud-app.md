@@ -151,9 +151,15 @@ existing `oidc_state`/`oidc_next` ones), so once the OIDC round trip
 completes, `oidc_callback` sends the top-level tab back to
 `<your Nextcloud URL>/apps/nextdesk/` instead of Nextdesk's own bare `/` —
 landing the user back inside the Nextcloud embed, now logged in, rather than
-stranding them on a full-page Nextdesk tab. That target always comes from the
-admin-configured Nextcloud URL (`nc_svc.get_system_config`), never from the
-client, so there's no open-redirect risk in trusting it.
+stranding them on a full-page Nextdesk tab. That target always comes from
+server-side config, never the client, so there's no open-redirect risk in
+trusting it: it prefers the admin's storage-integration Nextcloud URL
+(Admin → Storage → Nextcloud, stored as `nc.url`) and, if that isn't
+configured, falls back to deriving the origin from `OIDC_ISSUER` — which is
+always set whenever OIDC login works at all, and in the "Nextcloud is the
+OIDC provider" setup this targets, already points at that same instance. If
+neither yields a usable origin, it falls back to Nextdesk's own `/` (the
+old, pre-embed-aware behaviour).
 
 Since Nextdesk itself is typically configured to use Nextcloud as its OIDC
 provider ([auth setup](auth-setup.md#nextcloud-recommended--same-instance-as-your-storage)),

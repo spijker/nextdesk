@@ -1,6 +1,7 @@
 import logging
 import re
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -44,6 +45,23 @@ def _safe_next_path(next_: str | None) -> str | None:
     if not next_ or not next_.startswith("/") or next_.startswith("//"):
         return None
     return next_
+
+
+def _nextcloud_origin(configured_url: str) -> str:
+    """Origin to send an "embed=1" OIDC login back to (see Login.tsx / the
+    oidc_embed cookie below). Prefers the admin's storage-integration URL
+    (nc.url in Settings — configured separately, for WebDAV mounting, and
+    often left unset); when that's empty, falls back to OIDC_ISSUER, which
+    is always configured whenever OIDC login works at all and, in the
+    "Nextcloud is the OIDC provider" setup this feature targets, points at
+    that same Nextcloud instance."""
+    for candidate in (configured_url, settings.oidc_issuer):
+        if not candidate:
+            continue
+        parts = urlsplit(candidate)
+        if parts.scheme and parts.netloc:
+            return f"{parts.scheme}://{parts.netloc}"
+    return ""
 
 
 def _oidc_client() -> AsyncOAuth2Client:
@@ -385,14 +403,15 @@ async def oidc_callback(
     # Broke out of the Nextcloud embed for this login (see Login.tsx) — send
     # the user back to the Nextcloud page hosting Nextdesk, not Nextdesk's
     # own bare "/", so it doesn't just strand them on a full-page Nextdesk.
-    # The target is always the admin-configured Nextcloud URL (never
-    # client-supplied), so there's no open-redirect risk in trusting it.
+    # The target always comes from server-side config (nc.url or
+    # OIDC_ISSUER), never the client, so there's no open-redirect risk.
     target = _safe_next_path(oidc_next) or "/"
     if oidc_embed == "1":
         from app.services import nextcloud as nc_svc
-        nc_url = (await nc_svc.get_system_config(session)).get("url", "").rstrip("/")
-        if nc_url:
-            target = f"{nc_url}/apps/nextdesk/"
+        configured_url = (await nc_svc.get_system_config(session)).get("url", "")
+        origin = _nextcloud_origin(configured_url)
+        if origin:
+            target = f"{origin}/apps/nextdesk/"
 
     response = RedirectResponse(target)
     response.delete_cookie("oidc_state")
