@@ -25,7 +25,7 @@ See [Features](#features) below for the full list, or [docs/architecture.md](doc
 
 Nextdesk also works **embedded directly inside your Nextcloud environment** — a full Linux desktop, right there in Nextcloud's own navigation bar. 🖥️✨
 
-Install the bundled Nextcloud custom app (`nextcloud-app/nextdesk/`), point it at your Nextdesk URL, and users get a "Nextdesk" entry alongside Files/Calendar/Talk — click it and their desktop (or app) loads in an iframe without ever leaving Nextcloud. Login is seamless when both share the same OIDC provider (auto-mounts their Nextcloud storage too), fullscreen escapes the iframe cleanly, and it just works as if the desktop were a native Nextcloud app. See [docs/nextcloud-app.md](docs/nextcloud-app.md) for setup.
+Install the bundled Nextcloud custom app (`nextcloud-app/nextdesk/`), point it at your Nextdesk URL, and users get a "Nextdesk" entry alongside Files/Calendar/Talk — click it and their desktop (or app) loads in an iframe without ever leaving Nextcloud. Login is seamless when both share the same OIDC provider (auto-mounts their Nextcloud storage too), fullscreen escapes the iframe cleanly, and it just works as if the desktop were a native Nextcloud app. It also adds an **Open in Nextdesk** action to Nextcloud's own Files list — right-click a doc/image/PDF and it launches (or reuses) the right Nextdesk session with that file already open. See [docs/nextcloud-app.md](docs/nextcloud-app.md) for setup.
 
 ![Nextdesk embedded in Nextcloud](docs/images/embed.jpg)
 

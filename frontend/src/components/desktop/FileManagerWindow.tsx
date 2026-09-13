@@ -12,6 +12,7 @@ import client from "@/api/client";
 import { useAuthStore } from "@/store/auth";
 import { useDesktopStore } from "@/store/desktop";
 import { cn } from "@/lib/utils";
+import { IMAGE_MIMES, isOffice, isEditable, isImage, isPdf } from "@/lib/fileType";
 import type { App, Session } from "@/types";
 
 interface FileItem {
@@ -21,52 +22,6 @@ interface FileItem {
   size: number;
   modified: string;
   mime: string;
-}
-
-const IMAGE_MIMES = new Set([
-  "image/jpeg", "image/png", "image/gif", "image/webp",
-  "image/svg+xml", "image/bmp", "image/tiff",
-]);
-
-// Extensions we open in the built-in text editor (NC often reports a generic
-// mime for code files, so match on extension too).
-const TEXT_EXTS = new Set([
-  "txt", "md", "markdown", "rst", "log", "csv", "tsv",
-  "json", "jsonc", "yaml", "yml", "toml", "ini", "conf", "cfg", "env", "properties",
-  "sh", "bash", "zsh", "fish", "ps1", "bat",
-  "js", "cjs", "mjs", "ts", "tsx", "jsx", "vue", "svelte",
-  "py", "rb", "php", "pl", "lua", "r", "jl", "go", "rs", "java", "kt", "swift",
-  "c", "h", "cpp", "hpp", "cc", "cs",
-  "css", "scss", "less", "html", "htm", "xml", "svg", "sql", "graphql", "gql",
-  "tf", "hcl", "dockerfile", "gitignore", "editorconfig",
-]);
-const TEXT_NAMES = new Set(["Dockerfile", "Makefile", "Jenkinsfile", "LICENSE", "README"]);
-
-function isEditable(item: { name: string; mime: string; type: string }): boolean {
-  if (item.type === "dir") return false;
-  if (item.mime.startsWith("text/")) return true;
-  if (TEXT_NAMES.has(item.name)) return true;
-  const ext = item.name.split(".").pop()?.toLowerCase() ?? "";
-  return TEXT_EXTS.has(ext);
-}
-
-// Office documents open in the LibreOffice VNC app (double-click or Open with)
-const OFFICE_EXTS = new Set([
-  "doc", "docx", "odt", "ott", "xls", "xlsx", "ods", "ots",
-  "ppt", "pptx", "odp", "otp", "rtf",
-]);
-
-function isOffice(item: { name: string; type: string }): boolean {
-  if (item.type === "dir") return false;
-  const ext = item.name.split(".").pop()?.toLowerCase() ?? "";
-  return OFFICE_EXTS.has(ext);
-}
-
-function isImage(item: { name: string; mime: string; type: string }): boolean {
-  if (item.type === "dir") return false;
-  if (IMAGE_MIMES.has(item.mime)) return true;
-  const ext = item.name.split(".").pop()?.toLowerCase() ?? "";
-  return ["jpg", "jpeg", "png", "gif", "webp", "bmp"].includes(ext);
 }
 
 // Heavy (CodeMirror) — split into its own chunk, loaded only when a file opens.
@@ -488,7 +443,7 @@ export function FileManagerWindow() {
   const openItem = (item: FileItem) => {
     if (item.type === "dir") { navigate(item.path); return; }
     if (IMAGE_MIMES.has(item.mime)) { setLightbox(item.path); return; }
-    if (item.mime === "application/pdf") { setPdfPath(item.path); return; }
+    if (isPdf(item)) { setPdfPath(item.path); return; }
     // Office documents → LibreOffice VNC session with the file open
     if (isOffice(item)) {
       const lo = apps.find((a) => a.name === "LibreOffice");

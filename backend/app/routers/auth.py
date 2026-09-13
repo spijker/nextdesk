@@ -37,6 +37,15 @@ COOKIE_OPTS = dict(httponly=True, samesite="lax", secure=not settings.is_dev)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+def _safe_next_path(next_: str | None) -> str | None:
+    """Only allow same-origin relative paths (e.g. "/?open=/Docs/f.docx") as a
+    post-login redirect target — anything else (absolute URL, protocol-relative
+    "//host/...") is an open-redirect vector, so it's dropped."""
+    if not next_ or not next_.startswith("/") or next_.startswith("//"):
+        return None
+    return next_
+
+
 def _oidc_client() -> AsyncOAuth2Client:
     return AsyncOAuth2Client(
         client_id=settings.oidc_client_id,
@@ -267,7 +276,7 @@ async def _bootstrap_admin_check(session: AsyncSession) -> None:
 # ── OIDC ──────────────────────────────────────────────────────────────────────
 
 @router.get("/oidc/login")
-async def oidc_login():
+async def oidc_login(next: str | None = None):
     if not settings.oidc_issuer:
         raise HTTPException(status_code=503, detail="OIDC not configured")
     metadata = await _oidc_metadata()
@@ -275,6 +284,11 @@ async def oidc_login():
         url, state = client.create_authorization_url(metadata["authorization_endpoint"])
     response = RedirectResponse(url)
     response.set_cookie("oidc_state", state, max_age=300, **COOKIE_OPTS)
+    # Deep-link redirect target (e.g. "Open in Nextdesk" from Nextcloud Files) —
+    # survives the round trip to the IdP and back via this cookie.
+    safe_next = _safe_next_path(next)
+    if safe_next:
+        response.set_cookie("oidc_next", safe_next, max_age=300, **COOKIE_OPTS)
     return response
 
 
@@ -283,6 +297,7 @@ async def oidc_callback(
     code: str,
     state: str,
     oidc_state: str | None = Cookie(default=None),
+    oidc_next: str | None = Cookie(default=None),
     session: AsyncSession = Depends(get_session),
 ):
     if not oidc_state or state != oidc_state:
@@ -360,8 +375,9 @@ async def oidc_callback(
             logging.getLogger(__name__).warning(
                 "OIDC Nextcloud provisioning error", exc_info=True)
 
-    response = RedirectResponse("/")
+    response = RedirectResponse(_safe_next_path(oidc_next) or "/")
     response.delete_cookie("oidc_state")
+    response.delete_cookie("oidc_next")
     await _issue_login(response, user, session)
     return response
 

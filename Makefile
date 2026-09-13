@@ -1,4 +1,4 @@
-.PHONY: dev dev-all dev-desktop down logs ps build build-containers migrate shell-backend shell-db test lint
+.PHONY: dev dev-all dev-desktop down logs ps build build-containers migrate shell-backend shell-db test lint package-nc-app
 
 COMPOSE = docker compose -f compose/docker-compose.yml --env-file compose/.env
 
@@ -55,6 +55,13 @@ lint-frontend: ## tsc + eslint
 
 webtop: ## Add webtop desktop to a running dev stack (run in separate terminal after make dev)
 	$(COMPOSE) --profile testing up webtop
+
+package-nc-app: ## Build the Files action bundle + repackage nextdesk-nextcloud-app.zip
+	cd nextcloud-app/nextdesk && npm install && npm run build
+	rm -f nextdesk-nextcloud-app.zip
+	cd nextcloud-app && zip -r ../nextdesk-nextcloud-app.zip nextdesk \
+		-x 'nextdesk/node_modules/*' -x 'nextdesk/src/*' -x 'nextdesk/package*.json' \
+		-x 'nextdesk/vite.config.js' -x 'nextdesk/tsconfig.json' -x 'nextdesk/js/*.map'
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \

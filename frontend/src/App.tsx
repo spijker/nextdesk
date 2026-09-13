@@ -1,5 +1,5 @@
 import { useEffect, lazy, Suspense } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import client from "./api/client";
 import { useAuthStore } from "./store/auth";
 import { useDesktopStore } from "./store/desktop";
@@ -31,8 +31,15 @@ function Spinner() {
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuthStore();
+  const location = useLocation();
   if (loading) return <Spinner />;
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) {
+    // Preserve deep links (e.g. "?open=" from Nextcloud's "Open in Nextdesk")
+    // across the login round trip.
+    const target = location.pathname + location.search;
+    const to = target === "/" ? "/login" : `/login?next=${encodeURIComponent(target)}`;
+    return <Navigate to={to} replace />;
+  }
   return <>{children}</>;
 }
 

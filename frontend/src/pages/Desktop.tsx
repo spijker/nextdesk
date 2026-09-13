@@ -26,6 +26,7 @@ import { CommandPalette } from "@/components/desktop/CommandPalette";
 import { LockScreen } from "@/components/desktop/LockScreen";
 import { SimpleModeMenu } from "@/components/desktop/SimpleModeMenu";
 import { useOpenFilePoll } from "@/hooks/useOpenFilePoll";
+import { useDeepLinkOpen } from "@/hooks/useDeepLinkOpen";
 import { useClipboardCapture } from "@/hooks/useClipboardCapture";
 import { useSessionHeartbeat } from "@/hooks/useSessionHeartbeat";
 
@@ -276,6 +277,7 @@ export default function Desktop() {
     queryKey: ["apps"],
     queryFn: () => client.get("/api/apps").then((r) => r.data),
   });
+  useDeepLinkOpen(apps);
 
   const { data: ncCfg } = useQuery({
     queryKey: ["storage", "nextcloud"],

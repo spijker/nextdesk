@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { LogIn, Loader2, ShieldCheck, KeyRound, Eye, EyeOff } from "lucide-react";
 import client from "@/api/client";
@@ -61,6 +61,13 @@ export default function Login() {
   const setUser = useAuthStore((s) => s.setUser);
   const loadFromServer = useDesktopStore((s) => s.loadFromServer);
 
+  // Deep link to return to after login (e.g. "/?open=..." from Nextcloud's
+  // "Open in Nextdesk" Files action) — only a same-origin relative path is
+  // ever honoured, both here and server-side for the OIDC round trip.
+  const [searchParams] = useSearchParams();
+  const rawNext = searchParams.get("next");
+  const next = rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : null;
+
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -80,7 +87,7 @@ export default function Login() {
     const { data } = await client.get("/api/auth/me");
     setUser(data);
     if (data.preferences) loadFromServer(data.preferences);
-    navigate("/");
+    navigate(next || "/");
   };
 
   const loginMutation = useMutation({
@@ -320,7 +327,7 @@ export default function Login() {
 
       {showOidc && (
         <a
-          href="/api/auth/oidc/login"
+          href={next ? `/api/auth/oidc/login?next=${encodeURIComponent(next)}` : "/api/auth/oidc/login"}
           className="flex w-full items-center justify-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
           {methods?.oidc_label || "Sign in with your organisation"}
