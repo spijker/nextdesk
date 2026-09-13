@@ -125,9 +125,14 @@ tab, because the embedded context can't see that session's cookie.
    cookie heuristics are more lenient for same-site (registrable-domain)
    embeds than fully cross-site ones — it is not a guarantee, only an
    improvement.
-2. Set Nextdesk's session cookie with `SameSite=None; Secure` when serving
-   inside the iframe context, so browsers that *do* allow opted-in
-   third-party cookies accept it.
+2. Nextdesk already does this — no admin action needed. Its session cookies
+   (`access_token`/`refresh_token`) are set with `SameSite=None; Secure`
+   outside dev (`SESSION_COOKIE_OPTS` in `backend/app/routers/auth.py`), so
+   browsers that *do* allow opted-in third-party cookies accept them inside
+   the iframe. Without this they're `SameSite=Lax`, which browsers never
+   send on third-party subrequests at all (only top-level navigations) — so
+   every request from inside the embed would look logged-out regardless of
+   how the session was established, local or OIDC.
 3. If your users are on Safari or a hardened Firefox/Chrome profile, expect
    the iframe to sometimes require a fresh login even with the above — this
    is a browser policy, not a bug in this app. There is no fully reliable

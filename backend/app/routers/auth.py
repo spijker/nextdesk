@@ -35,6 +35,23 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 COOKIE_OPTS = dict(httponly=True, samesite="lax", secure=not settings.is_dev)
 
+# access_token/refresh_token also have to work when Nextdesk is loaded inside
+# the Nextcloud embed iframe (nextcloud-app/nextdesk) — a third-party context
+# from the browser's point of view. SameSite=Lax cookies are only sent on
+# top-level navigations, never on third-party subrequests like an iframe's
+# own fetch/XHR calls, so every request from inside the embed would look
+# logged-out regardless of how the session was established (OIDC or local).
+# SameSite=None opts back in, but browsers require Secure to go with it, so
+# this only takes effect outside dev — plain HTTP dev doesn't support iframe
+# embedding anyway. See "Third-party cookie caveat" in docs/nextcloud-app.md
+# for the residual browsers (Safari ITP, hardened Firefox/Chrome) this still
+# doesn't cover.
+SESSION_COOKIE_OPTS = dict(
+    httponly=True,
+    samesite="lax" if settings.is_dev else "none",
+    secure=not settings.is_dev,
+)
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -104,8 +121,8 @@ async def _issue_login(response: Response, user: User, session: AsyncSession) ->
     await session.commit()
     await session.refresh(user)
     uid, ver = str(user.id), user.token_version
-    response.set_cookie("access_token", create_access_token(uid, ver), max_age=3600, **COOKIE_OPTS)
-    response.set_cookie("refresh_token", create_refresh_token(uid, ver), max_age=86400 * 7, **COOKIE_OPTS)
+    response.set_cookie("access_token", create_access_token(uid, ver), max_age=3600, **SESSION_COOKIE_OPTS)
+    response.set_cookie("refresh_token", create_refresh_token(uid, ver), max_age=86400 * 7, **SESSION_COOKIE_OPTS)
 
 
 async def _bootstrap_admin(session: AsyncSession, user: User) -> None:
@@ -445,15 +462,15 @@ async def refresh(
     if user.token_version != payload.get("ver", 0):
         raise HTTPException(status_code=401, detail="Signed in on another device")
     response = Response()
-    response.set_cookie("access_token", create_access_token(str(user.id), user.token_version), max_age=3600, **COOKIE_OPTS)
+    response.set_cookie("access_token", create_access_token(str(user.id), user.token_version), max_age=3600, **SESSION_COOKIE_OPTS)
     return response
 
 
 @router.post("/logout")
 async def logout():
     response = Response()
-    response.delete_cookie("access_token")
-    response.delete_cookie("refresh_token")
+    response.delete_cookie("access_token", samesite=SESSION_COOKIE_OPTS["samesite"])
+    response.delete_cookie("refresh_token", samesite=SESSION_COOKIE_OPTS["samesite"])
     return response
 
 
