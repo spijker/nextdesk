@@ -68,6 +68,18 @@ export default function Login() {
   const rawNext = searchParams.get("next");
   const next = rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : null;
 
+  // Running inside the Nextcloud embed iframe? OIDC has to break out to the
+  // top level to complete (see the target="_top" link below) — once signed
+  // in, the backend sends the user back to the Nextcloud page hosting
+  // Nextdesk instead of stranding them on a bare Nextdesk tab.
+  const embedded = typeof window !== "undefined" && window.self !== window.top;
+  const oidcParams = new URLSearchParams();
+  if (next) oidcParams.set("next", next);
+  if (embedded) oidcParams.set("embed", "1");
+  const oidcHref = oidcParams.toString()
+    ? `/api/auth/oidc/login?${oidcParams.toString()}`
+    : "/api/auth/oidc/login";
+
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -327,15 +339,16 @@ export default function Login() {
 
       {showOidc && (
         <a
-          href={next ? `/api/auth/oidc/login?next=${encodeURIComponent(next)}` : "/api/auth/oidc/login"}
-          // Running inside the Nextcloud embed iframe (see nextcloud-app/nextdesk)?
+          href={oidcHref}
           // Break out to the top-level tab for the whole OIDC round trip. When
           // Nextcloud is also the IdP, its own login/consent page can refuse to
           // render nested (framebusting or X-Frame-Options) and forces the tab
           // back to plain Nextcloud mid-flow instead of completing the redirect
           // — target="_top" does that breakout deliberately, before the OIDC
           // dance starts, so it completes cleanly instead of getting stranded.
-          target={window.self !== window.top ? "_top" : undefined}
+          // The "embed=1" param above tells the backend to send the user back
+          // to the Nextcloud embed page afterward, not Nextdesk's bare "/".
+          target={embedded ? "_top" : undefined}
           className="flex w-full items-center justify-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
           {methods?.oidc_label || "Sign in with your organisation"}

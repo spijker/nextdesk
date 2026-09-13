@@ -145,11 +145,15 @@ is also the OIDC provider, *its own* login/consent page can refuse to render
 nested (framebusting or `X-Frame-Options`) and will otherwise yank the tab
 back to a bare Nextcloud page mid-flow instead of completing the redirect
 back to Nextdesk. Breaking out before starting the OIDC round trip avoids
-that entirely. The trade-off: after signing in this way, the user lands on
-Nextdesk's own full-page desktop, not back inside the Nextcloud embed — they
-can navigate back to Nextcloud themselves, and the next time they open the
-Nextdesk nav entry there the iframe will just show their already-logged-in
-desktop (cookie permitting, per the caveat above).
+that entirely. The link also passes `embed=1` through `/api/auth/oidc/login`
+(stored server-side in a short-lived `oidc_embed` cookie alongside the
+existing `oidc_state`/`oidc_next` ones), so once the OIDC round trip
+completes, `oidc_callback` sends the top-level tab back to
+`<your Nextcloud URL>/apps/nextdesk/` instead of Nextdesk's own bare `/` —
+landing the user back inside the Nextcloud embed, now logged in, rather than
+stranding them on a full-page Nextdesk tab. That target always comes from the
+admin-configured Nextcloud URL (`nc_svc.get_system_config`), never from the
+client, so there's no open-redirect risk in trusting it.
 
 Since Nextdesk itself is typically configured to use Nextcloud as its OIDC
 provider ([auth setup](auth-setup.md#nextcloud-recommended--same-instance-as-your-storage)),

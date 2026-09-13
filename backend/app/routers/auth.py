@@ -276,7 +276,7 @@ async def _bootstrap_admin_check(session: AsyncSession) -> None:
 # ── OIDC ──────────────────────────────────────────────────────────────────────
 
 @router.get("/oidc/login")
-async def oidc_login(next: str | None = None):
+async def oidc_login(next: str | None = None, embed: int = 0):
     if not settings.oidc_issuer:
         raise HTTPException(status_code=503, detail="OIDC not configured")
     metadata = await _oidc_metadata()
@@ -289,6 +289,12 @@ async def oidc_login(next: str | None = None):
     safe_next = _safe_next_path(next)
     if safe_next:
         response.set_cookie("oidc_next", safe_next, max_age=300, **COOKIE_OPTS)
+    # Login.tsx sets this when it broke out of the Nextcloud embed iframe
+    # (target="_top") to run OIDC at the top level — the callback below uses
+    # it to send the user back to the Nextcloud embed page instead of
+    # Nextdesk's own bare "/".
+    if embed:
+        response.set_cookie("oidc_embed", "1", max_age=300, **COOKIE_OPTS)
     return response
 
 
@@ -298,6 +304,7 @@ async def oidc_callback(
     state: str,
     oidc_state: str | None = Cookie(default=None),
     oidc_next: str | None = Cookie(default=None),
+    oidc_embed: str | None = Cookie(default=None),
     session: AsyncSession = Depends(get_session),
 ):
     if not oidc_state or state != oidc_state:
@@ -375,9 +382,22 @@ async def oidc_callback(
             logging.getLogger(__name__).warning(
                 "OIDC Nextcloud provisioning error", exc_info=True)
 
-    response = RedirectResponse(_safe_next_path(oidc_next) or "/")
+    # Broke out of the Nextcloud embed for this login (see Login.tsx) — send
+    # the user back to the Nextcloud page hosting Nextdesk, not Nextdesk's
+    # own bare "/", so it doesn't just strand them on a full-page Nextdesk.
+    # The target is always the admin-configured Nextcloud URL (never
+    # client-supplied), so there's no open-redirect risk in trusting it.
+    target = _safe_next_path(oidc_next) or "/"
+    if oidc_embed == "1":
+        from app.services import nextcloud as nc_svc
+        nc_url = (await nc_svc.get_system_config(session)).get("url", "").rstrip("/")
+        if nc_url:
+            target = f"{nc_url}/apps/nextdesk/"
+
+    response = RedirectResponse(target)
     response.delete_cookie("oidc_state")
     response.delete_cookie("oidc_next")
+    response.delete_cookie("oidc_embed")
     await _issue_login(response, user, session)
     return response
 
