@@ -1,4 +1,8 @@
-# Nextcloud Linux Workspace (LWP)
+<p align="center">
+  <img src="nextdesk.png" alt="Nextdesk" width="120" />
+</p>
+
+# Nextdesk (Nextcloud Linux Workspace — LWP)
 
 > **Proof of Concept.** This is a working POC, not a hardened production release — code and APIs may change without notice, and it hasn't had a full security audit. Everything below is implemented and runnable, but treat it as a demo/evaluation build.
 >
@@ -50,9 +54,11 @@ First user to log in automatically becomes admin.
 ## Features
 
 ### Desktop
-- **Windowed desktop** — draggable, resizable windows with snap zones (left/right half, maximise)
-- **Window management** — minimise, maximise, cascade; Alt+Tab switcher; Mission Control (Exposé)
+- **Windowed desktop** — draggable, resizable windows with snap zones (halves, quarters, corners, maximise)
+- **Window management** — minimise, maximise, cascade, always-on-top pin; Alt+Tab switcher; Mission Control (Exposé)
 - **Workspaces** — 4 virtual desktops; windows stay mounted (no reconnect on switch)
+- **Simple mode** — admin-configurable per-group layout with no taskbar/launcher, just Files + app tiles, for kiosk-style or non-technical users; users pick Desktop/Simple in Profile when allowed
+- **Idle lock screen** — PIN-based lock after inactivity, plus an idle-warning toast before auto-suspend; Super+L to lock, Super+D to show desktop
 - **App launcher** — categorised grid, search, drag app to taskbar to pin
 - **Taskbar quick launch** — pin apps by dragging from launcher or right-click → "Pin to taskbar"
 - **Desktop icons** — pin apps to the desktop background
@@ -66,6 +72,7 @@ First user to log in automatically becomes admin.
 - **Idle suspend** — sessions pause after 15 min inactivity, resume on activity (idle tracked *inside* the session iframe too, not just the top window)
 - **Background Terminal** — opt-in (Profile): Terminal survives idle, window close, and closed tabs — jobs keep running in its persistent `screen` session for up to 48 h; relaunching reattaches
 - **Reconnect / health** — liveness ping + "Connection lost → Reconnect" overlay
+- **Live thumbnails** — taskbar/session previews refresh periodically from the running session
 - **Drag-drop file transfer** — drop a file on the session viewer → uploads to `~/Files`
 - **Shared clipboard** — bridges copy/paste **between all apps** (VNC *and* web) — see Clipboard below
 - **Mute** — per-window mute button
@@ -94,6 +101,7 @@ First user to log in automatically becomes admin.
   - **Notifications** — dismiss / clear all (with a taskbar unread badge).
 - **Extra mounts (SFTP / S3)** — users add their own remotes in Profile (SFTP with private key **or** username/password; S3 with access keys); rclone-mounted at `~/Mount/<name>` in every session, credentials stored Fernet-encrypted.
 - **Persistent home** — Docker named volume / K8s PVC per user survives session restarts.
+- **Nextcloud custom app** (`nextcloud-app/nextdesk/`) — adds a Nextdesk entry to Nextcloud's own navigation bar, embedding Nextdesk in an iframe so users never leave Nextcloud. Admin sets the URL from Nextcloud's Settings UI. See [docs/nextcloud-app.md](docs/nextcloud-app.md).
 
 ### Clipboard
 - **Shared desktop clipboard** — bridges copy/paste across session apps (each app is its own container), VNC and web-native alike:
@@ -127,8 +135,8 @@ First user to log in automatically becomes admin.
 - Your recent activity (audit trail) and preferences (logout behaviour, reduce-motion, background Terminal, clipboard sync)
 
 ### Admin
-- **Users** — create/edit, disable, **delete**, **force-logout**, **stop their desktops**, **sign everyone out**
-- **Groups** — membership + **per-group quotas** (concurrent sessions + CPU/mem ceilings)
+- **Users** — create/edit, disable, **delete**, **force-logout**, **stop their desktops**, **sign everyone out**, **bulk actions** on multi-selected users
+- **Groups** — membership + **per-group quotas** (concurrent sessions + CPU/mem ceilings) + **Simple mode** layout policy
 - **Apps** — catalog CRUD, per-group permissions, `web_native` toggle
 - **Sessions** — monitor all, stop / bulk-kill, **CSV export**
 - **Traffic** — live dashboard: active sessions, users online, 24h logins/failures, active-by-app, live session table (polls 10s)
@@ -192,10 +200,12 @@ lwp/
 │   ├── base/
 │   └── overlays/{dev,prod}/
 ├── nginx/                  dev.conf + prod.conf
+├── nextcloud-app/nextdesk/ Nextcloud custom app — embeds Nextdesk in Nextcloud's nav
 └── docs/
     ├── architecture.md
     ├── apps.md            App catalog + adding VNC / web-native apps
     ├── auth-setup.md
+    ├── nextcloud-app.md   Nextcloud custom app setup
     ├── custom-image.md
     ├── vpn.md             Per-user VPN gateway
     ├── deployment-k8s.md
@@ -212,6 +222,7 @@ GitHub mirror). Locally: `pip install mkdocs-material && mkdocs serve`.
 - [Architecture](docs/architecture.md)
 - [Apps: catalog & adding your own](docs/apps.md)
 - [Auth provider setup](docs/auth-setup.md)
+- [Nextcloud custom app (embed Nextdesk in Nextcloud)](docs/nextcloud-app.md)
 - [Build a custom app image](docs/custom-image.md)
 - [Per-user VPN gateway](docs/vpn.md)
 - [Kubernetes deployment](docs/deployment-k8s.md)
