@@ -21,6 +21,14 @@ See [Features](#features) below for the full list, or [docs/architecture.md](doc
 
 ![LWP desktop](docs/images/workspace.png)
 
+## Embedding in Nextcloud
+
+Nextdesk also works **embedded directly inside your Nextcloud environment** — a full Linux desktop, right there in Nextcloud's own navigation bar. 🖥️✨
+
+Install the bundled Nextcloud custom app (`nextcloud-app/nextdesk/`), point it at your Nextdesk URL, and users get a "Nextdesk" entry alongside Files/Calendar/Talk — click it and their desktop (or app) loads in an iframe without ever leaving Nextcloud. Login is seamless when both share the same OIDC provider (auto-mounts their Nextcloud storage too), fullscreen escapes the iframe cleanly, and it just works as if the desktop were a native Nextcloud app. See [docs/nextcloud-app.md](docs/nextcloud-app.md) for setup.
+
+![Nextdesk embedded in Nextcloud](docs/images/embed.jpg)
+
 ## Stack
 
 | Layer | Technology |
@@ -151,14 +159,6 @@ First user to log in automatically becomes admin.
 - **Session bandwidth** — nginx logs per-session bytes → **mtail** sidecar (`:3903/metrics`) exports `nginx_session_bytes_{sent,received}_total`; importable Grafana dashboard in `docs/grafana-dashboard.json`
 - **SIEM/syslog** — forward audit events (Admin → Settings → Security); **login lockout + IP allow/deny**
 - **K8s hardening** — PodDisruptionBudgets, nightly `pg_dump` CronJob (7-day retention), session-pod probes, orphaned-PVC cleanup
-
-### Embedding in Nextcloud
-
-Nextdesk also works **embedded directly inside your Nextcloud environment** — a full Linux desktop, right there in Nextcloud's own navigation bar. 🖥️✨
-
-Install the bundled Nextcloud custom app (`nextcloud-app/nextdesk/`), point it at your Nextdesk URL, and users get a "Nextdesk" entry alongside Files/Calendar/Talk — click it and their desktop (or app) loads in an iframe without ever leaving Nextcloud. Login is seamless when both share the same OIDC provider (auto-mounts their Nextcloud storage too), fullscreen escapes the iframe cleanly, and it just works as if the desktop were a native Nextcloud app. See [docs/nextcloud-app.md](docs/nextcloud-app.md) for setup.
-
-![Nextdesk embedded in Nextcloud](docs/images/embed.jpg)
 
 ## Makefile targets
 
