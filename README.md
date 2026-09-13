@@ -158,6 +158,8 @@ Nextdesk also works **embedded directly inside your Nextcloud environment** — 
 
 Install the bundled Nextcloud custom app (`nextcloud-app/nextdesk/`), point it at your Nextdesk URL, and users get a "Nextdesk" entry alongside Files/Calendar/Talk — click it and their desktop (or app) loads in an iframe without ever leaving Nextcloud. Login is seamless when both share the same OIDC provider (auto-mounts their Nextcloud storage too), fullscreen escapes the iframe cleanly, and it just works as if the desktop were a native Nextcloud app. See [docs/nextcloud-app.md](docs/nextcloud-app.md) for setup.
 
+![Nextdesk embedded in Nextcloud](docs/images/embed.jpg)
+
 ## Makefile targets
 
 | Target | Description |
