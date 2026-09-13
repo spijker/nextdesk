@@ -25,7 +25,7 @@ this for end users on those browsers.]]></description>
     <repository type="git">https://github.com/phvos-lang/nextcloud-workspace.git</repository>
     <screenshot>https://raw.githubusercontent.com/phvos-lang/nextcloud-workspace/main/docs/workspace.png</screenshot>
     <dependencies>
-        <nextcloud min-version="27" max-version="31"/>
+        <nextcloud min-version="27" max-version="34"/>
     </dependencies>
     <navigations>
         <navigation>
