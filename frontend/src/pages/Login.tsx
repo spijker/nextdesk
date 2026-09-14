@@ -67,7 +67,10 @@ export default function Login() {
   // ever honoured, both here and server-side for the OIDC round trip.
   const [searchParams] = useSearchParams();
   const rawNext = searchParams.get("next");
-  const next = rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : null;
+  // Backslashes rejected too: some URL parsers/browsers treat a leading "/\"
+  // like "//" (protocol-relative), the exact open-redirect bypass class
+  // covered by GHSA-wrjc-x8rr-h8h6 (react-router <Link>/useNavigate).
+  const next = rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//") && !rawNext.includes("\\") ? rawNext : null;
 
   // Running inside the Nextcloud embed iframe? OIDC has to break out to the
   // top level to complete (see the target="_top" link below) — once signed

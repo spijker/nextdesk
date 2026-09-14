@@ -73,8 +73,9 @@ def _session_cookie_opts(request: Request) -> dict:
 def _safe_next_path(next_: str | None) -> str | None:
     """Only allow same-origin relative paths (e.g. "/?open=/Docs/f.docx") as a
     post-login redirect target — anything else (absolute URL, protocol-relative
-    "//host/...") is an open-redirect vector, so it's dropped."""
-    if not next_ or not next_.startswith("/") or next_.startswith("//"):
+    "//host/...", or a leading "/\" — some URL parsers treat that like "//"
+    too, the open-redirect bypass class in GHSA-wrjc-x8rr-h8h6) is dropped."""
+    if not next_ or not next_.startswith("/") or next_.startswith("//") or "\\" in next_:
         return None
     return next_
 
