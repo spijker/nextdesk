@@ -15,3 +15,13 @@ images:
 
 patches:
   - path: nginx-config-patch.yaml
+  # Set to your Nextcloud origin(s) if you're using the Nextcloud custom app
+  # (nextcloud-app/nextdesk) to embed this instance — space-separated
+  # https://... origins. Leave the value empty to disable embedding.
+  - target:
+      kind: Deployment
+      name: nginx
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: "https://cloud.example.com"

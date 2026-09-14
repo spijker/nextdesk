@@ -23,9 +23,21 @@ spec:
           ports:
             - containerPort: 80
             - containerPort: 443
+          env:
+            # Space-separated https://... origin(s) allowed to embed this in
+            # an iframe (Nextcloud custom app) — override per-overlay; empty
+            # means no embedding allowed. See nginx/prod.conf.
+            - name: NEXTCLOUD_EMBED_ORIGINS
+              value: ""
+          # nginx.conf is a template — substitute NEXTCLOUD_EMBED_ORIGINS (and
+          # only that; nginx's own $host/$scheme/etc. runtime variables are
+          # untouched) before nginx starts.
+          command: ["/bin/sh", "-c"]
+          args:
+            - envsubst '$$NEXTCLOUD_EMBED_ORIGINS' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'
           volumeMounts:
             - name: nginx-config
-              mountPath: /etc/nginx/nginx.conf
+              mountPath: /etc/nginx/nginx.conf.template
               subPath: nginx.conf
             - name: tls-certs
               mountPath: /etc/nginx/certs

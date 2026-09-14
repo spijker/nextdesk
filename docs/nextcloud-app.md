@@ -64,13 +64,17 @@ A **Nextdesk** icon now appears in Nextcloud's app navigation for all users.
 Nextdesk's nginx config blocks being framed by other origins by default
 (`X-Frame-Options` / CSP `frame-ancestors`, both set to `'self'`). Since
 Nextcloud is a different origin, embedding it in an iframe needs that opened
-up explicitly. In `nginx/prod.conf` (and `nginx/dev.conf` for local testing),
-find the `frame-ancestors` directive in the `Content-Security-Policy` header
-and add your Nextcloud origin:
+up explicitly — set via the `NEXTCLOUD_EMBED_ORIGINS` env var (space-separated
+`https://...` origins), not by editing `nginx/prod.conf`/`dev.conf` directly:
+nginx substitutes it into the `frame-ancestors` directive at container start.
 
-```nginx
-add_header Content-Security-Policy "... frame-ancestors 'self' https://cloud.example.com;" always;
-```
+- **Docker Compose**: set `NEXTCLOUD_EMBED_ORIGINS=https://cloud.example.com`
+  in `compose/.env`.
+- **Kubernetes**: set it on the `nginx` Deployment's `NEXTCLOUD_EMBED_ORIGINS`
+  env var — see the patch example in `k8s/overlays/prod/kustomization.yaml`.
+
+Leave it empty (the default) and embedding is disabled entirely — same as
+`X-Frame-Options SAMEORIGIN`.
 
 `X-Frame-Options` isn't used for this because it can't express "allow this
 one other origin" — only `DENY`, `SAMEORIGIN`, or the deprecated/unreliable

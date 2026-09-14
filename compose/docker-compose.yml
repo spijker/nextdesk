@@ -128,9 +128,19 @@ services:
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
+    environment:
+      # Space-separated https://... origins allowed to embed this instance in
+      # an iframe (the Nextcloud custom app) — empty means no embedding.
+      NEXTCLOUD_EMBED_ORIGINS: ${NEXTCLOUD_EMBED_ORIGINS:-}
     volumes:
-      - ../nginx/dev.conf:/etc/nginx/nginx.conf:ro
+      - ../nginx/dev.conf:/etc/nginx/nginx.conf.template:ro
       - nginx_logs:/var/log/nginx
+    # dev.conf is a template — substitute NEXTCLOUD_EMBED_ORIGINS (and only
+    # that; nginx's own $host/$scheme/etc. runtime variables are untouched)
+    # before nginx starts.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - envsubst '$$NEXTCLOUD_EMBED_ORIGINS' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'
     depends_on:
       - backend
       - frontend
