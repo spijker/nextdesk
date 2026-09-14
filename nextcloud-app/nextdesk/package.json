@@ -1,6 +1,6 @@
 {
 	"name": "nextdesk",
-	"version": "1.0.0",
+	"version": "1.1.0-rc1",
 	"private": true,
 	"type": "module",
 	"description": "Nextcloud Files action: Open in Nextdesk",

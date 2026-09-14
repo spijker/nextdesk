@@ -15,7 +15,7 @@ Because the desktop is a third-party iframe, some browsers' third-party
 cookie restrictions (Safari ITP, Chrome's phase-out) can interfere with
 keeping the embedded session logged in — see the README before relying on
 this for end users on those browsers.]]></description>
-    <version>1.0.0</version>
+    <version>1.1.0-rc1</version>
     <licence>mit</licence>
     <author>Nextdesk</author>
     <namespace>Nextdesk</namespace>
