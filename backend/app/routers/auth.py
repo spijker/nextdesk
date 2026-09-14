@@ -179,6 +179,7 @@ async def auth_methods(session: AsyncSession = Depends(get_session)):
         "local": "local" in methods,
         "ldap": "ldap" in methods,
         "needs_setup": user_count == 0,
+        "footer_text": settings.footer_text,
     }
 
 

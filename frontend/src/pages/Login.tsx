@@ -12,6 +12,7 @@ interface AuthMethods {
   local: boolean;
   ldap: boolean;
   needs_setup: boolean;
+  footer_text?: string;
 }
 
 function Field({
@@ -190,7 +191,7 @@ export default function Login() {
 
       {/* Footer */}
       <div className="relative py-4 text-center">
-        <p className="text-xs text-white/20">LWP — Proof of Concept</p>
+        <p className="text-xs text-white/20">{methods?.footer_text || "Nextdesk — Powered by VPE © 2026"}</p>
       </div>
     </div>
   );

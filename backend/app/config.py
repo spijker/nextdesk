@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     # App
     lwp_base_url: str = "http://localhost"
     lwp_env: str = "production"
+    # Small text shown under the login card — e.g. product/company branding.
+    footer_text: str = "Nextdesk — Powered by VPE © 2026"
 
     # Docker (dev only) — network session containers join so Nginx can reach them
     docker_network: str = "compose_internal"
