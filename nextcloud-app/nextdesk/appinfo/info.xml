@@ -16,7 +16,7 @@ cookie restrictions (Safari ITP, Chrome's phase-out) can interfere with
 keeping the embedded session logged in — see the README before relying on
 this for end users on those browsers.]]></description>
     <version>1.0.0</version>
-    <licence>agpl</licence>
+    <licence>mit</licence>
     <author>Nextdesk</author>
     <namespace>Nextdesk</namespace>
     <category>tools</category>
