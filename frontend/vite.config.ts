@@ -11,6 +11,18 @@ const allowedHosts = process.env.VITE_ALLOWED_HOSTS
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // The TextEditor chunk (CodeMirror + @uiw/codemirror-extensions-langs,
+    // which statically bundles every supported language grammar rather than
+    // tree-shaking to just the ones used) is a deliberate ~570kB-gzipped
+    // lazy chunk — see the lazy(() => import("./TextEditor")) comment in
+    // FileManagerWindow.tsx. It's fetched once, only if a file is actually
+    // opened, never part of the main bundle. Raised past that chunk's own
+    // ~1.6MB size so this known, accepted tradeoff doesn't warn on every
+    // build; a genuinely oversized *eager* chunk (main bundle is currently
+    // ~730kB) would still be caught.
+    chunkSizeWarningLimit: 1700,
+  },
   // react-draggable (used by react-rnd) references process.env.NODE_ENV at runtime;
   // Vite doesn't polyfill process so we inject it manually.
   define: {
