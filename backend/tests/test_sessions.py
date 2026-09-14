@@ -1,12 +1,13 @@
 import uuid
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.app_catalog import App
+from app.models.session import Session as UserSession
 from app.models.user import User
 from app.security import create_access_token, generate_session_token
-from app.models.session import Session as UserSession
 
 
 async def _setup(db: AsyncSession):

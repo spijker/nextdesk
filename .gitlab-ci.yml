@@ -17,7 +17,7 @@ backend-lint:
     paths: [.cache/pip]
   script:
     - pip install --quiet "ruff>=0.8"
-    - cd backend && ruff check app/
+    - cd backend && ruff check app/ tests/
 
 frontend-lint:
   stage: lint
