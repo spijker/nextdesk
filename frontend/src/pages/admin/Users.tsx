@@ -176,7 +176,7 @@ export default function AdminUsers() {
 
   const toggleOne = (id: string) => setSelected((s) => {
     const next = new Set(s);
-    next.has(id) ? next.delete(id) : next.add(id);
+    if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
   const allFilteredSelected = filtered.length > 0 && filtered.every((u) => selected.has(u.id));
@@ -191,9 +191,11 @@ export default function AdminUsers() {
     setSelected(new Set());
     qc.invalidateQueries({ queryKey: ["admin", "users"] });
     const failed = results.filter((r) => r.status === "rejected").length;
-    failed
-      ? toast.error(`${ids.length - failed}/${ids.length} succeeded — ${failed} failed`)
-      : toast.success(`Done for ${ids.length} user${ids.length === 1 ? "" : "s"}`);
+    if (failed) {
+      toast.error(`${ids.length - failed}/${ids.length} succeeded — ${failed} failed`);
+    } else {
+      toast.success(`Done for ${ids.length} user${ids.length === 1 ? "" : "s"}`);
+    }
   };
 
   return (

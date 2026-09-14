@@ -191,9 +191,11 @@ export default function AdminSessions() {
     setSelected(new Set());
     qc.invalidateQueries({ queryKey: ["admin", "sessions"] });
     const failed = results.filter((r) => r.status === "rejected").length;
-    failed
-      ? toast.error(`${ids.length - failed}/${ids.length} killed — ${failed} failed`)
-      : toast.success(`Killed ${ids.length} session${ids.length === 1 ? "" : "s"}`);
+    if (failed) {
+      toast.error(`${ids.length - failed}/${ids.length} killed — ${failed} failed`);
+    } else {
+      toast.success(`Killed ${ids.length} session${ids.length === 1 ? "" : "s"}`);
+    }
   };
 
   const bulkKill = useMutation({
@@ -283,7 +285,7 @@ export default function AdminSessions() {
                     checked={selected.has(s.id)}
                     onChange={() => setSelected((cur) => {
                       const next = new Set(cur);
-                      next.has(s.id) ? next.delete(s.id) : next.add(s.id);
+                      if (next.has(s.id)) next.delete(s.id); else next.add(s.id);
                       return next;
                     })}
                     className="h-4 w-4"

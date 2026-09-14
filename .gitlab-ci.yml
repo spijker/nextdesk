@@ -19,6 +19,17 @@ backend-lint:
     - pip install --quiet "ruff>=0.8"
     - cd backend && ruff check app/
 
+frontend-lint:
+  stage: lint
+  image: node:20-slim
+  cache:
+    key: npm
+    paths: [.cache/npm]
+  script:
+    - cd frontend
+    - npm ci --no-audit --no-fund
+    - npm run lint   # tsc --noEmit && eslint src
+
 backend-test:
   stage: test
   image: python:3.13.14-slim-trixie

@@ -36,9 +36,11 @@ export function FullscreenButton() {
     return () => document.removeEventListener("fullscreenchange", h);
   }, []);
   const toggle = useCallback(() => {
-    document.fullscreenElement
-      ? document.exitFullscreen()
-      : document.documentElement.requestFullscreen();
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      document.documentElement.requestFullscreen();
+    }
   }, []);
   return (
     <button

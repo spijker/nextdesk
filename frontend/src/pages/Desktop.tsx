@@ -151,7 +151,7 @@ export default function Desktop() {
     if (theme === "light")  { root.classList.remove("dark"); return; }
     // system
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    mq.matches ? root.classList.add("dark") : root.classList.remove("dark");
+    if (mq.matches) root.classList.add("dark"); else root.classList.remove("dark");
     const onChange = (e: MediaQueryListEvent) =>
       e.matches ? root.classList.add("dark") : root.classList.remove("dark");
     mq.addEventListener("change", onChange);

@@ -18,3 +18,7 @@
 - [ ] **Multi-monitor support** — KasmVNC supports it but frontend only handles single display
 - [ ] **User-initiated password change** — currently only admin can reset passwords
 - [ ] **Launch options dialog** — override resolution, env vars, resource limits per-session
+- [x] **Nextcloud embedding** — custom Nextcloud app (`nextcloud-app/nextdesk/`) puts Nextdesk in Nextcloud's own nav bar via iframe; OIDC login breaks out to the top level and back (Nextcloud's own login page can't complete nested) ✅
+- [x] **Open in Nextdesk (Files deep link)** — right-click a file in Nextcloud's Files list → opens/reuses the right Nextdesk session with it already open, via a Vite-built Nextcloud Files action ✅
+- [ ] **Same-parent-domain embedding** — the OIDC-return-to-embed flow only reliably stays logged in when Nextcloud and Nextdesk share a parent domain (browser storage partitioning otherwise isolates the session cookie between direct and iframe-embedded contexts) — works today across different domains for the login itself, just not for staying embedded afterward
+- [x] **Frontend lint** — `npm run lint` was broken (ESLint 9 needs a flat config, none existed); added `eslint.config.js` + the usual React/TS plugin set, wired into CI

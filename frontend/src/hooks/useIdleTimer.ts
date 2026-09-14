@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import {
   getLastActivity, initGlobalActivity, onActivity,
 } from "@/lib/activity";
@@ -19,8 +19,14 @@ export function useIdleTimer({ idleMs, onIdle, onActive, enabled = true }: IdleT
   const isIdle    = useRef(false);
   const idleCb    = useRef(onIdle);
   const activeCb  = useRef(onActive);
-  idleCb.current   = onIdle;
-  activeCb.current = onActive;
+
+  // Keep the latest callbacks without re-subscribing the effect below —
+  // mutating refs belongs in an effect, not the render body itself (unsafe
+  // under concurrent rendering), so this runs post-commit instead.
+  useLayoutEffect(() => {
+    idleCb.current   = onIdle;
+    activeCb.current = onActive;
+  });
 
   useEffect(() => {
     if (!enabled) return;
