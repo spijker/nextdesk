@@ -117,13 +117,22 @@ async def create_session(
             ).order_by(Session.started_at.desc())
         )
         if existing:
-            if existing.status == "suspended":
-                await container_svc.resume(existing.pod_name, existing.service_name)
-                existing.status = "running"
-                await db.commit()
-            if open_path and nc_env:
-                await _enqueue_open_in(existing.session_token, mount_base, str(open_path))
-            return _session_out(existing, app)
+            # The backing container can die without going through our own
+            # stop path (host reap, OOM, node restart) — background/VNC
+            # sessions are exempt from the idle/lifetime reaper, so a dead
+            # one would otherwise be handed back as "running" forever and
+            # the app would look permanently broken to the user.
+            if await container_svc.is_running(existing.pod_name):
+                if existing.status == "suspended":
+                    await container_svc.resume(existing.pod_name, existing.service_name)
+                    existing.status = "running"
+                    await db.commit()
+                if open_path and nc_env:
+                    await _enqueue_open_in(existing.session_token, mount_base, str(open_path))
+                return _session_out(existing, app)
+            existing.status = "stopped"
+            existing.ended_at = datetime.now(UTC)
+            await db.commit()
 
     # VPN gateway apps are singletons per user — the gateway owns the user's
     # "vpn" network alias, and SSO portals allow one concurrent login anyway.

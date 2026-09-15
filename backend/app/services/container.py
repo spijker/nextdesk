@@ -140,6 +140,20 @@ async def resume(pod_name: str, service_name: str) -> None:
         await _k8s_scale(service_name, replicas=1)
 
 
+async def is_running(pod_name: str) -> bool:
+    """Is the backing container/pod actually still alive?
+
+    Single-instance reuse (VNC desktops, background Terminal) hands the same
+    DB session back out on every relaunch — if the container died behind our
+    back (host reap, OOM, node restart) with no self-stop callback, reuse
+    would otherwise keep returning a dead pod forever, looking like the app
+    "won't start" until the 48h background cap (or admin) cleans it up.
+    """
+    if settings.is_dev:
+        return await asyncio.to_thread(_docker_is_running_sync, pod_name)
+    return await _k8s_is_running(pod_name)
+
+
 # ── Docker (dev) ──────────────────────────────────────────────────────────────
 
 async def _docker_start(
@@ -347,6 +361,21 @@ def _docker_resume_sync(pod_name: str) -> None:
         log.info("Unpaused Docker container %s", pod_name)
     except Exception as e:
         log.warning("Docker unpause error for %s: %s", pod_name, e)
+
+
+def _docker_is_running_sync(pod_name: str) -> bool:
+    import docker
+    client = docker.from_env()
+    try:
+        c = client.containers.get(pod_name)
+        return c.status in ("running", "paused")
+    except docker.errors.NotFound:
+        return False
+    except Exception as e:
+        # Can't tell — assume alive rather than yanking a live session out
+        # from under the user over a transient Docker API hiccup.
+        log.warning("Docker status check error for %s: %s", pod_name, e)
+        return True
 
 
 # ── Kubernetes (prod) ─────────────────────────────────────────────────────────
@@ -585,6 +614,24 @@ async def _k8s_stop(pod_name: str, service_name: str) -> None:
         except Exception as e:
             log.warning("K8s cleanup %s: %s", name, e)
 
+
+
+async def _k8s_is_running(pod_name: str) -> bool:
+    from kubernetes_asyncio import client as k8s
+    from kubernetes_asyncio import config as k8s_config
+    await k8s_config.load_incluster_config()
+    core = k8s.CoreV1Api()
+    try:
+        pod = await core.read_namespaced_pod(name=pod_name, namespace="lwp")
+        return pod.status.phase in ("Running", "Pending")
+    except k8s.exceptions.ApiException as e:
+        if e.status == 404:
+            return False
+        log.warning("K8s status check error for %s: %s", pod_name, e)
+        return True
+    except Exception as e:
+        log.warning("K8s status check error for %s: %s", pod_name, e)
+        return True
 
 
 async def _k8s_scale(service_name: str, replicas: int) -> None:
