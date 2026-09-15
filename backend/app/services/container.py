@@ -154,6 +154,22 @@ async def is_running(pod_name: str) -> bool:
     return await _k8s_is_running(pod_name)
 
 
+async def ensure_metadata_egress_block() -> None:
+    """Block session containers from reaching the cloud metadata endpoint
+    (169.254.169.254 — the same address on AWS, GCP, Azure and DigitalOcean)
+    so a compromised or malicious session can't SSRF the host's instance
+    credentials. Applies once, host/cluster-wide, at startup — best-effort,
+    like the per-user VPN NetworkPolicy below; failures are logged, not fatal.
+    """
+    try:
+        if settings.is_dev:
+            await asyncio.to_thread(_docker_block_metadata_sync)
+        else:
+            await _k8s_block_metadata()
+    except Exception as e:
+        log.warning("Metadata-IP egress block not installed: %s", e)
+
+
 # ── Docker (dev) ──────────────────────────────────────────────────────────────
 
 async def _docker_start(
@@ -191,6 +207,18 @@ def _docker_start_sync(
         old.remove(force=True)
     except docker.errors.NotFound:
         pass
+
+    # create_container() (the low-level API used below, for host_config
+    # control run() doesn't expose) does NOT auto-pull like `docker run`/
+    # containers.run() do — it 404s if the image isn't already local. Our own
+    # lwp-* images are always present (built via `make`); anything pointing
+    # at a registry (a hand-typed registry.example.com/img:tag, or the
+    # LinuxServer.io catalog picker) needs an explicit pull on first launch.
+    try:
+        client.images.get(container_image)
+    except docker.errors.ImageNotFound:
+        log.info("Pulling image %s (not present locally)", container_image)
+        client.images.pull(container_image)
 
     # Base environment
     env = {
@@ -283,8 +311,10 @@ def _docker_start_sync(
         # which never reaps orphaned children (e.g. ssh's `nc` ProxyCommand
         # child if ssh dies first) — they pile up as zombies for the life of
         # the container. --init attaches docker-init (tini) as a proper
-        # subreaper.
-        init=True,
+        # subreaper. Not for kasm-type apps though — LinuxServer.io images
+        # run s6-overlay, whose suexec hard-refuses to start ("can only run
+        # as pid 1") once tini takes PID 1 and execs it as PID 2 instead.
+        init=(app_type != "kasm"),
     )
     if unmask_proc:
         host_config["MaskedPaths"] = []
@@ -382,6 +412,33 @@ def _docker_is_running_sync(pod_name: str) -> bool:
         # from under the user over a transient Docker API hiccup.
         log.warning("Docker status check error for %s: %s", pod_name, e)
         return True
+
+
+def _docker_block_metadata_sync() -> None:
+    """Insert a DROP rule for 169.254.169.254 into the DOCKER-USER chain —
+    the hook point Docker leaves alone on restart (unlike the FORWARD chain,
+    which it rewrites), so this survives `docker compose restart`. Applies to
+    every container on the host, including the per-user VPN networks, since
+    a container's own traffic always traverses its veth into this chain
+    regardless of whether it's going direct or through the in-container VPN
+    relay. Runs via a throwaway --net=host helper container so it works
+    whether the backend itself is containerized or not.
+    """
+    import docker
+    client = docker.from_env()
+    client.containers.run(
+        "alpine:3.20",
+        command=[
+            "sh", "-c",
+            "apk add --no-cache iptables >/dev/null 2>&1 && "
+            "(iptables -C DOCKER-USER -d 169.254.169.254/32 -j DROP 2>/dev/null || "
+            "iptables -I DOCKER-USER -d 169.254.169.254/32 -j DROP)",
+        ],
+        network_mode="host",
+        cap_add=["NET_ADMIN"],
+        remove=True,
+    )
+    log.info("Metadata-IP egress block installed (DOCKER-USER chain)")
 
 
 # ── Kubernetes (prod) ─────────────────────────────────────────────────────────
@@ -655,6 +712,45 @@ async def _k8s_scale(service_name: str, replicas: int) -> None:
         log.info("K8s scale %s → %d replicas", service_name, replicas)
     except Exception as e:
         log.warning("K8s scale error for %s: %s", service_name, e)
+
+
+async def _k8s_block_metadata() -> None:
+    """Namespace-wide NetworkPolicy: allow all pod egress except the cloud
+    metadata IP. Standard NetworkPolicy has no explicit-deny rule, so this is
+    expressed as the only allowed egress peer being 0.0.0.0/0 minus that one
+    /32 — once a NetworkPolicy selects a pod for a given direction (Egress
+    here), unlisted destinations are denied by default. Requires a CNI with
+    NetworkPolicy support (Calico/Cilium/etc.) — same caveat as the per-user
+    VPN policy above.
+    """
+    from kubernetes_asyncio import client as k8s
+    from kubernetes_asyncio import config as k8s_config
+    await k8s_config.load_incluster_config()
+
+    netpol = k8s.V1NetworkPolicy(
+        metadata=k8s.V1ObjectMeta(
+            name="lwp-block-metadata", namespace="lwp", labels={"lwp.managed": "true"},
+        ),
+        spec=k8s.V1NetworkPolicySpec(
+            pod_selector=k8s.V1LabelSelector(match_labels={"lwp.managed": "true"}),
+            policy_types=["Egress"],
+            egress=[
+                k8s.V1NetworkPolicyEgressRule(
+                    to=[k8s.V1NetworkPolicyPeer(
+                        ip_block=k8s.V1IPBlock(cidr="0.0.0.0/0", _except=["169.254.169.254/32"])
+                    )],
+                ),
+            ],
+        ),
+    )
+    networking = k8s.NetworkingV1Api()
+    try:
+        await networking.create_namespaced_network_policy(namespace="lwp", body=netpol)
+    except Exception:
+        await networking.replace_namespaced_network_policy(
+            name="lwp-block-metadata", namespace="lwp", body=netpol
+        )
+    log.info("Metadata-IP egress block installed (NetworkPolicy lwp-block-metadata)")
 
 
 def _parse_size(s: str) -> int:

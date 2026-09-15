@@ -68,22 +68,30 @@ const STREAM_PRESETS: Preset[] = [
   },
 ];
 
-const FLATPAK_IMAGE = "lwp-flatpak";
+// ── LinuxServer.io catalog (app_type: "kasm" — KasmVNC, port 3000) ────────────
 
-interface FlatpakPreset {
-  label: string;
-  icon: string;
-  flatpakId: string;
+interface LsImage {
+  name: string;
+  description: string;
+  category: string;
+  icon_url: string;
+  tags: string[];
 }
 
-const FLATPAK_PRESETS: FlatpakPreset[] = [
-  { label: "VLC", icon: "🎬", flatpakId: "org.videolan.VLC" },
-  { label: "GIMP", icon: "🎨", flatpakId: "org.gimp.GIMP" },
-  { label: "Inkscape", icon: "✏️", flatpakId: "org.inkscape.Inkscape" },
-  { label: "OBS Studio", icon: "🎥", flatpakId: "com.obsproject.Studio" },
-  { label: "Blender", icon: "🧊", flatpakId: "org.blender.Blender" },
-  { label: "Spotify", icon: "🎧", flatpakId: "com.spotify.Client" },
+interface LsPreset { label: string; icon: string; name: string; tag?: string }
+
+const LINUXSERVER_PRESETS: LsPreset[] = [
+  { label: "Firefox", icon: "🦊", name: "firefox" },
+  { label: "Chromium", icon: "🌐", name: "chromium" },
+  { label: "Vivaldi", icon: "🅅", name: "vivaldi" },
+  { label: "LibreOffice", icon: "📝", name: "libreoffice" },
+  { label: "Thunderbird", icon: "📧", name: "thunderbird" },
+  { label: "Webtop (Ubuntu XFCE)", icon: "🖥️", name: "webtop", tag: "ubuntu-xfce" },
 ];
+
+function titleCaseName(name: string): string {
+  return name.split(/[-_]/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
 
 // ── Form types ────────────────────────────────────────────────────────────────
 
@@ -92,7 +100,7 @@ interface AppForm {
   description: string;
   category: string;
   icon_url: string;
-  app_type: "web" | "stream";
+  app_type: "web" | "stream" | "kasm";
   web_url: string;
   container_image: string;
   proxy_port: number;
@@ -118,13 +126,21 @@ const DEFAULTS_STREAM: AppForm = {
   env_json: {}, mount_home: true, is_enabled: true,
 };
 
+const DEFAULTS_KASM: AppForm = {
+  name: "", description: "", category: "General", icon_url: "",
+  app_type: "kasm", web_url: "", container_image: "",
+  proxy_port: 3000, cpu_limit: "2000m", mem_limit: "2Gi", shm_size: "1Gi",
+  env_json: {}, mount_home: true, is_enabled: true,
+};
+
 // ── Label chip ────────────────────────────────────────────────────────────────
 
 const TYPE_COLORS: Record<string, string> = {
   stream: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
   web:    "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
+  kasm:   "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
 };
-const TYPE_LABELS: Record<string, string> = { stream: "VNC app", web: "Web app" };
+const TYPE_LABELS: Record<string, string> = { stream: "VNC app", web: "Web app", kasm: "LinuxServer.io" };
 
 // ── AppField — defined outside AppModal so React never remounts it on re-render ──
 
@@ -196,7 +212,7 @@ function EnvEditor({ value, onChange }: { value: Record<string, string>; onChang
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
-type Mode = "web" | "stream" | "flatpak";
+type Mode = "web" | "stream" | "kasm";
 
 function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
   const qc = useQueryClient();
@@ -205,13 +221,9 @@ function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
   const [form, setForm] = useState<AppForm>(() => {
     if (!isNew) {
       const a = app as App;
-      // Existing kasm apps editable as stream (same fields)
-      const type: "web" | "stream" = a.app_type === "web" ? "web" : "stream";
-      // LWP_FLATPAK_APP_ID is driven by its own field below, not the advanced
-      // env editor — keep it out of there to avoid two sources of truth.
-      const restEnv = { ...(a.env_json ?? {}) };
-      delete restEnv.LWP_FLATPAK_APP_ID;
-      return { ...(a as unknown as AppForm), app_type: type, env_json: restEnv };
+      const type: "web" | "stream" | "kasm" =
+        a.app_type === "web" ? "web" : a.app_type === "kasm" ? "kasm" : "stream";
+      return { ...(a as unknown as AppForm), app_type: type };
     }
     return DEFAULTS_WEB;
   });
@@ -220,13 +232,15 @@ function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
     if (isNew) return "web";
     const a = app as App;
     if (a.app_type === "web") return "web";
-    return a.container_image === FLATPAK_IMAGE ? "flatpak" : "stream";
+    if (a.app_type === "kasm") return "kasm";
+    return "stream";
   });
-  const [flatpakId, setFlatpakId] = useState<string>(() => {
-    if (isNew) return "";
-    return (app as App).env_json?.LWP_FLATPAK_APP_ID ?? "";
-  });
-  const [lookupErr, setLookupErr] = useState("");
+
+  const [lsQuery, setLsQuery] = useState("");
+  const [lsResults, setLsResults] = useState<LsImage[] | null>(null);
+  const [lsErr, setLsErr] = useState("");
+  const [lsPicked, setLsPicked] = useState<LsImage | null>(null);
+  const [lsTag, setLsTag] = useState("latest");
 
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -238,20 +252,20 @@ function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
   const switchMode = (m: Mode) => {
     setMode(m);
     setSelectedPreset(null);
-    setLookupErr("");
-    if (m !== "flatpak") setFlatpakId("");
+    if (m !== "kasm") { setLsResults(null); setLsPicked(null); setLsQuery(""); setLsErr(""); }
     setForm((f) => {
-      const base = m === "web" ? DEFAULTS_WEB : DEFAULTS_STREAM;
+      const base = m === "web" ? DEFAULTS_WEB : m === "kasm" ? DEFAULTS_KASM : DEFAULTS_STREAM;
       return {
         ...base,
         name: f.name,
         description: f.description,
-        category: m === "flatpak" ? (f.category === "General" ? "Flatpak" : f.category) : f.category,
+        category: f.category,
         icon_url: f.icon_url,
         is_enabled: f.is_enabled,
-        container_image: m === "flatpak" ? FLATPAK_IMAGE : base.container_image,
       };
     });
+    // Browse mode: show popular GUI-capable images right away, no typing needed.
+    if (m === "kasm") lsSearch.mutate("");
   };
 
   const applyPreset = (preset: Preset) => {
@@ -259,40 +273,49 @@ function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
     setForm((f) => ({ ...f, ...preset.defaults }));
   };
 
-  const lookup = useMutation({
-    mutationFn: (id: string) =>
-      client.get("/api/admin/apps/flatpak/lookup", { params: { app_id: id } }).then((r) => r.data),
-    onSuccess: (data: { name: string; summary: string; icon_url: string }) => {
-      setLookupErr("");
-      // Always overwrite — this only runs on an explicit "Look up" click (or a
-      // preset pick), so a stale name/icon from a previously-looked-up id
-      // never lingers after the admin switches to a different app.
-      setForm((f) => ({
-        ...f,
-        name: data.name,
-        description: data.summary,
-        icon_url: data.icon_url,
-      }));
-    },
-    onError: (e: any) => setLookupErr(e.response?.data?.detail ?? "Lookup failed"),
+  const lsSearch = useMutation({
+    mutationFn: (q: string) =>
+      client.get("/api/admin/apps/linuxserver/lookup", { params: { q } }).then((r) => r.data as LsImage[]),
+    onSuccess: (data) => { setLsErr(""); setLsResults(data); },
+    onError: (e: any) => setLsErr(e.response?.data?.detail ?? "Search failed"),
   });
 
-  const applyFlatpakPreset = (preset: FlatpakPreset) => {
+  const pickLsImage = (img: LsImage, tag?: string) => {
+    const chosenTag = tag ?? img.tags[0] ?? "latest";
+    setLsPicked(img);
+    setLsTag(chosenTag);
+    setForm((f) => ({
+      ...f,
+      name: f.name || titleCaseName(img.name),
+      description: img.description,
+      icon_url: img.icon_url,
+      category: (img.category || "General").split(",")[0].trim() || "General",
+      container_image: `lscr.io/linuxserver/${img.name}:${chosenTag}`,
+    }));
+  };
+
+  const changeLsTag = (tag: string) => {
+    setLsTag(tag);
+    if (lsPicked) set("container_image", `lscr.io/linuxserver/${lsPicked.name}:${tag}`);
+  };
+
+  const applyLsPreset = (preset: LsPreset) => {
     setSelectedPreset(preset.label);
-    setFlatpakId(preset.flatpakId);
-    lookup.mutate(preset.flatpakId);
+    setLsQuery(preset.name);
+    lsSearch.mutate(preset.name, {
+      onSuccess: (data) => {
+        setLsErr(""); setLsResults(data);
+        const exact = data.find((d) => d.name === preset.name);
+        if (exact) pickLsImage(exact, preset.tag);
+      },
+    });
   };
 
   const save = useMutation({
-    mutationFn: () => {
-      const payload =
-        mode === "flatpak"
-          ? { ...form, container_image: FLATPAK_IMAGE, env_json: { ...form.env_json, LWP_FLATPAK_APP_ID: flatpakId.trim() } }
-          : form;
-      return isNew
-        ? client.post("/api/admin/apps", payload)
-        : client.put(`/api/admin/apps/${(app as App).id}`, payload);
-    },
+    mutationFn: () =>
+      isNew
+        ? client.post("/api/admin/apps", form)
+        : client.put(`/api/admin/apps/${(app as App).id}`, form),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "apps"] });
       toast.success(isNew ? "App created" : "App updated");
@@ -324,7 +347,7 @@ function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
           <div>
             <p className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Type</p>
             <div className="grid grid-cols-3 gap-2">
-              {(["web", "stream", "flatpak"] as const).map((t) => (
+              {(["web", "stream", "kasm"] as const).map((t) => (
                 <button
                   key={t}
                   type="button"
@@ -339,12 +362,12 @@ function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
                   <div className="font-semibold text-sm">
                     {t === "web" && "🌐 Web app"}
                     {t === "stream" && "🖥️ VNC app"}
-                    {t === "flatpak" && "📦 Flatpak"}
+                    {t === "kasm" && "📥 LinuxServer.io"}
                   </div>
                   <div className="mt-0.5 text-[11px] text-gray-400">
                     {t === "web" && "Opens a URL in a browser container"}
                     {t === "stream" && "Streamed via KasmVNC — audio included"}
-                    {t === "flatpak" && "Any Flathub app — no image build"}
+                    {t === "kasm" && "Maintained lscr.io image — no build"}
                   </div>
                 </button>
               ))}
@@ -363,18 +386,18 @@ function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
             </>
           )}
 
-          {/* Flatpak app fields */}
-          {mode === "flatpak" && (
+          {/* LinuxServer.io catalog fields */}
+          {mode === "kasm" && (
             <>
               {isNew && (
                 <div>
-                  <p className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Popular on Flathub</p>
-                  <div className="grid grid-cols-4 gap-2">
-                    {FLATPAK_PRESETS.map((p) => (
+                  <p className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">Popular on LinuxServer.io</p>
+                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+                    {LINUXSERVER_PRESETS.map((p) => (
                       <button
                         key={p.label}
                         type="button"
-                        onClick={() => applyFlatpakPreset(p)}
+                        onClick={() => applyLsPreset(p)}
                         className={cn(
                           "flex flex-col items-center gap-1 rounded-xl border p-2.5 text-center text-xs transition-colors",
                           selectedPreset === p.label
@@ -392,34 +415,80 @@ function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
 
               <div>
                 <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
-                  Flathub app ID<span className="ml-0.5 text-red-400">*</span>
+                  Search the LinuxServer.io catalog
                 </label>
                 <div className="flex gap-1.5">
                   <input
-                    value={flatpakId}
-                    onChange={(e) => { setFlatpakId(e.target.value); setSelectedPreset(null); }}
-                    placeholder="e.g. org.videolan.VLC"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm dark:border-gray-700 dark:bg-gray-800"
+                    value={lsQuery}
+                    onChange={(e) => { setLsQuery(e.target.value); setSelectedPreset(null); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); lsSearch.mutate(lsQuery.trim()); } }}
+                    placeholder="e.g. firefox, webtop, jellyfin"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800"
                   />
                   <button
                     type="button"
-                    onClick={() => lookup.mutate(flatpakId.trim())}
-                    disabled={!flatpakId.trim() || lookup.isPending}
+                    onClick={() => lsSearch.mutate(lsQuery.trim())}
+                    disabled={lsSearch.isPending}
                     className="shrink-0 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
                   >
-                    {lookup.isPending ? "Looking up…" : "Look up"}
+                    {lsSearch.isPending ? "Searching…" : "Search"}
                   </button>
                 </div>
                 <p className="mt-1 text-[11px] text-gray-400">
-                  The exact app ID from flathub.org — fills in the name, description and icon below.
+                  Pulls a maintained lscr.io/linuxserver image — no build step. Leave it blank and hit Search
+                  to browse popular browser/desktop-style images instead of the whole (mostly headless) catalog.
                 </p>
-                {lookupErr && <p className="mt-1 text-xs text-red-500">{lookupErr}</p>}
+                {lsErr && <p className="mt-1 text-xs text-red-500">{lsErr}</p>}
               </div>
+
+              {lsResults && lsResults.length > 0 && (
+                <div className="max-h-48 space-y-1 overflow-y-auto rounded-xl border border-gray-200 p-1.5 dark:border-gray-700">
+                  {lsResults.map((img) => (
+                    <button
+                      key={img.name}
+                      type="button"
+                      onClick={() => pickLsImage(img)}
+                      className={cn(
+                        "flex w-full items-center gap-2.5 rounded-lg p-2 text-left text-xs transition-colors",
+                        lsPicked?.name === img.name
+                          ? "bg-indigo-50 dark:bg-indigo-900/20"
+                          : "hover:bg-gray-50 dark:hover:bg-gray-800"
+                      )}
+                    >
+                      {img.icon_url
+                        ? <img src={img.icon_url} alt="" className="h-6 w-6 shrink-0 rounded object-contain" />
+                        : <span className="text-lg">🐳</span>}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium">{img.name}</p>
+                        <p className="truncate text-gray-400">{img.category}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {lsResults && lsResults.length === 0 && (
+                <p className="text-xs text-gray-400">No matches.</p>
+              )}
+
+              {lsPicked && lsPicked.tags.length > 1 && (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">Variant</label>
+                  <select
+                    value={lsTag}
+                    onChange={(e) => changeLsTag(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800"
+                  >
+                    {lsPicked.tags.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <AppField label="Name" {...f("name")} required />
-                <AppField label="Category" {...f("category")} placeholder="Flatpak" />
+                <AppField label="Category" {...f("category")} placeholder="General" />
               </div>
+              <AppField label="Container image" {...f("container_image")} required mono
+                placeholder="lscr.io/linuxserver/firefox:latest" />
               <AppField label="Icon URL" {...f("icon_url")} placeholder="https://…/icon.png" />
             </>
           )}
@@ -489,8 +558,8 @@ function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
             />
           </div>
 
-          {/* Advanced (stream / flatpak only) */}
-          {(mode === "stream" || mode === "flatpak") && (
+          {/* Advanced (stream / kasm only) */}
+          {(mode === "stream" || mode === "kasm") && (
             <div>
               <button
                 type="button"
@@ -559,7 +628,7 @@ function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
             disabled={
               !form.name ||
               (mode === "web" && !form.web_url) ||
-              (mode === "flatpak" && !flatpakId.trim()) ||
+              (mode === "kasm" && !form.container_image.trim()) ||
               save.isPending
             }
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
@@ -645,7 +714,6 @@ export default function AdminApps() {
           </thead>
           <tbody>
             {apps.map((a) => {
-              const isFlatpak = a.container_image === FLATPAK_IMAGE;
               return (
               <tr
                 key={a.id}
@@ -656,7 +724,7 @@ export default function AdminApps() {
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-lg dark:bg-gray-800">
                       {a.icon_url
                         ? <img src={a.icon_url} alt="" className="h-5 w-5 object-contain" />
-                        : <span>{isFlatpak ? "📦" : a.app_type === "web" ? "🌐" : "🖥️"}</span>}
+                        : <span>{a.app_type === "web" ? "🌐" : "🖥️"}</span>}
                     </div>
                     <div>
                       <p className="font-medium">{a.name}</p>
@@ -667,9 +735,9 @@ export default function AdminApps() {
                 <td className="px-4 py-3">
                   <span className={cn(
                     "rounded-full px-2 py-0.5 text-xs font-medium",
-                    isFlatpak ? "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300" : (TYPE_COLORS[a.app_type] ?? TYPE_COLORS.stream)
+                    TYPE_COLORS[a.app_type] ?? TYPE_COLORS.stream
                   )}>
-                    {isFlatpak ? "Flatpak" : (TYPE_LABELS[a.app_type] ?? a.app_type)}
+                    {TYPE_LABELS[a.app_type] ?? a.app_type}
                   </span>
                   {!a.is_enabled && (
                     <span className="ml-1.5 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-400 dark:bg-gray-800">
@@ -679,7 +747,7 @@ export default function AdminApps() {
                 </td>
                 <td className="px-4 py-3 max-w-[220px] font-mono text-xs text-gray-400">
                   <span className="block truncate">
-                    {isFlatpak ? (a.env_json?.LWP_FLATPAK_APP_ID || FLATPAK_IMAGE) : (a.container_image || a.web_url || "—")}
+                    {a.container_image || a.web_url || "—"}
                   </span>
                   {a.container_image && staleness?.images?.[a.container_image]?.status === "stale" && (
                     <span className="mt-0.5 inline-block rounded-full bg-amber-100 px-2 py-0.5 font-sans text-[10px] font-medium text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">

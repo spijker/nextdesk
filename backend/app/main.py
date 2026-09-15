@@ -106,8 +106,11 @@ async def lifespan(app: FastAPI):
     async with SessionLocal() as db:
         await seed_apps(db)
     gauge_task = asyncio.create_task(_refresh_active_sessions_gauge())
+    from app.services.container import ensure_metadata_egress_block
+    egress_task = asyncio.create_task(ensure_metadata_egress_block())
     yield
     gauge_task.cancel()
+    egress_task.cancel()
     await engine.dispose()
 
 

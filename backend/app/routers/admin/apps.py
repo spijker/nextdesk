@@ -1,4 +1,4 @@
-import re
+import time
 import uuid
 
 import httpx
@@ -13,40 +13,79 @@ from app.models.user import User
 
 router = APIRouter(prefix="/api/admin/apps", tags=["admin-apps"])
 
-FLATHUB_TIMEOUT = 10
-FLATPAK_APP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*(\.[A-Za-z0-9][A-Za-z0-9_-]*)+$")
+LINUXSERVER_API = "https://api.linuxserver.io/api/v1/images?include_config=false"
+LINUXSERVER_TIMEOUT = 10
+# Single-process in-memory cache — the published catalog changes on the order
+# of days, not per-request; swap for Redis in multi-replica prod (same caveat
+# as the build-log progress dict in admin/builds.py).
+_ls_catalog: list[dict] | None = None
+_ls_catalog_at = 0.0
+_LS_CATALOG_TTL = 6 * 3600
 
 
-@router.get("/flatpak/lookup")
-async def flatpak_lookup(
-    app_id: str,
+async def _linuxserver_catalog() -> list[dict]:
+    global _ls_catalog, _ls_catalog_at
+    if _ls_catalog is not None and (time.monotonic() - _ls_catalog_at) < _LS_CATALOG_TTL:
+        return _ls_catalog
+
+    async with httpx.AsyncClient(timeout=LINUXSERVER_TIMEOUT) as c:
+        try:
+            resp = await c.get(LINUXSERVER_API)
+        except httpx.HTTPError:
+            raise HTTPException(status_code=502, detail="Couldn't reach the LinuxServer.io catalog")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail="LinuxServer.io catalog lookup failed")
+
+    images = resp.json().get("data", {}).get("repositories", {}).get("linuxserver", [])
+    _ls_catalog, _ls_catalog_at = images, time.monotonic()
+    return images
+
+
+# Categories that actually render a usable GUI over KasmVNC — most of the
+# ~200 LinuxServer.io images are headless server apps (torrent clients, the
+# *arr stack, etc.) that would just show an empty desktop. Only applied when
+# browsing with no search term; an explicit search still matches the whole
+# catalog since the admin might know better.
+GUI_CATEGORIES = (
+    "web browser", "remote desktop", "documents", "email",
+    "multimedia", "productivity", "creative", "graphics",
+)
+
+
+@router.get("/linuxserver/lookup")
+async def linuxserver_lookup(
+    q: str = "",
     _: User = Depends(require_role(["admin"])),
 ):
-    """Fetch name/summary/icon for a Flathub app id, so the admin only has to
-    paste the id (e.g. org.videolan.VLC) when adding a Flatpak app. Proxied
-    server-side so the admin's browser doesn't need to reach flathub.org."""
-    app_id = app_id.strip()
-    if not FLATPAK_APP_ID_RE.match(app_id):
-        raise HTTPException(status_code=422, detail="That doesn't look like a Flatpak app ID (e.g. org.videolan.VLC)")
-
-    async with httpx.AsyncClient(timeout=FLATHUB_TIMEOUT) as c:
-        try:
-            resp = await c.get(f"https://flathub.org/api/v2/appstream/{app_id}")
-        except httpx.HTTPError:
-            raise HTTPException(status_code=502, detail="Couldn't reach Flathub")
-
-    if resp.status_code == 404:
-        raise HTTPException(status_code=404, detail=f"'{app_id}' isn't on Flathub")
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail="Flathub lookup failed")
-
-    data = resp.json()
-    return {
-        "app_id": app_id,
-        "name": data.get("name") or app_id,
-        "summary": data.get("summary") or "",
-        "icon_url": data.get("icon") or "",
-    }
+    """Search — or with no query, browse — the public LinuxServer.io image
+    catalog (their published fleet API) so an admin can add a maintained
+    lscr.io/linuxserver/<name> image (app_type=kasm, KasmVNC on port 3000)
+    without hand-typing the registry path and tag. Proxied server-side,
+    cached in-process."""
+    images = await _linuxserver_catalog()
+    needle = q.strip().lower()
+    if needle:
+        matches = [
+            img for img in images
+            if needle in (img.get("name") or "").lower()
+            or needle in (img.get("category") or "").lower()
+        ]
+    else:
+        matches = [
+            img for img in images
+            if any(c in (img.get("category") or "").lower() for c in GUI_CATEGORIES)
+        ]
+    matches.sort(key=lambda img: (-(img.get("monthly_pulls") or 0), img.get("name") or ""))
+    return [
+        {
+            "name": img.get("name"),
+            "description": img.get("description", ""),
+            "category": img.get("category", ""),
+            "icon_url": img.get("project_logo") or "",
+            "tags": [t.get("tag") for t in img.get("tags", []) if t.get("tag")] or ["latest"],
+        }
+        for img in matches[:40]
+    ]
 
 
 @router.get("")
