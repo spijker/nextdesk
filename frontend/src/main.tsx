@@ -18,3 +18,12 @@ createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </StrictMode>
 );
+
+// Registers the app-shell service worker (see public/sw.js) so the app is
+// installable; harmless no-op in dev (Vite's own dev server still serves
+// fresh modules — the SW only intercepts the built app shell in prod).
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}

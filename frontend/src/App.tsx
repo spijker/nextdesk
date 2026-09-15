@@ -4,6 +4,7 @@ import client from "./api/client";
 import { useAuthStore } from "./store/auth";
 import { useDesktopStore } from "./store/desktop";
 import AppShell from "./components/layout/AppShell";
+import { NetworkStatusBanner } from "./components/layout/NetworkStatusBanner";
 import Login from "./pages/Login";
 import Desktop from "./pages/Desktop";
 
@@ -66,6 +67,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <NetworkStatusBanner />
       <Suspense fallback={<Spinner />}>
       <Routes>
         <Route path="/login" element={<Login />} />
