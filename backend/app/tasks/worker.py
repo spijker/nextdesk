@@ -2,7 +2,7 @@
 ARQ background worker.
 
 Tasks:
-  - expire_sessions: runs every 60s, kills pods past their time limit
+  - expire_sessions: runs every 5 minutes (see WorkerSettings.cron_jobs), kills pods past their time limit
   - pull_image: fires when admin triggers image pull
 
 Run standalone:

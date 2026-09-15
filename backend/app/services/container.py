@@ -279,6 +279,12 @@ def _docker_start_sync(
         devices=devices or None,
         cap_add=cap_add or None,
         security_opt=security_opt or None,
+        # Session entrypoints exec straight into ttyd/supervisord as PID 1,
+        # which never reaps orphaned children (e.g. ssh's `nc` ProxyCommand
+        # child if ssh dies first) — they pile up as zombies for the life of
+        # the container. --init attaches docker-init (tini) as a proper
+        # subreaper.
+        init=True,
     )
     if unmask_proc:
         host_config["MaskedPaths"] = []
