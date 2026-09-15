@@ -285,7 +285,11 @@ export function Window({ win }: Props) {
         // could realistically reach in one session.
         style={{ zIndex: win.alwaysOnTop ? win.zIndex + 100000 : win.zIndex, position: "fixed", display: hidden ? "none" : undefined }}
         // ── focus on any click anywhere in the window ───────────────────────
-        onMouseDown={() => focusWindow(win.windowId)}
+        // Skip the store update when already on top — otherwise every
+        // mousedown while selecting text in the active window (each click of
+        // a multi-click select, drag-selecting) bumps maxZ/zIndex and
+        // re-renders every window for no visible change.
+        onMouseDown={() => { if (!isActive) focusWindow(win.windowId); }}
         // ── drag ───────────────────────────────────────────────────────────
         onDragStart={() => { setDragging(true); setInteracting(true); }}
         onDrag={(e) => {

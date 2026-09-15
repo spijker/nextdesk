@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { toast } from "sonner";
 import { LayoutGrid, Maximize, Minimize, LogOut, Layers, ClipboardCheck, ShieldCheck, LockKeyhole, Square } from "lucide-react";
 import { ClipboardManager } from "./ClipboardManager";
 import { NextcloudHub } from "./NextcloudHub";
@@ -36,11 +37,16 @@ export function FullscreenButton() {
     return () => document.removeEventListener("fullscreenchange", h);
   }, []);
   const toggle = useCallback(() => {
-    if (document.fullscreenElement) {
-      document.exitFullscreen();
-    } else {
-      document.documentElement.requestFullscreen();
-    }
+    // requestFullscreen()/exitFullscreen() return a promise that rejects
+    // silently (NotAllowedError/TypeError) when the browser refuses the
+    // request — e.g. no user-activation left, or the document isn't allowed
+    // fullscreen at all. Without a .catch() the button just does nothing
+    // with zero visible signal, so surface it.
+    const p = document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+    p.catch((err: Error) => {
+      console.error("fullscreen toggle failed:", err);
+      toast.error(`Fullscreen blocked: ${err.message || err.name}`);
+    });
   }, []);
   return (
     <button

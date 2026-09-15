@@ -49,6 +49,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
       // before the click fires, unmounting the menu and swallowing the
       // click — the button is visibly there but nothing happens.
       onMouseDown={(e) => e.stopPropagation()}
+      onMouseLeave={onClose}
     >
       {items.map((item, i) =>
         item.divider ? (
