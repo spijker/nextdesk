@@ -10,7 +10,7 @@ privileged containers.
 ┌────────────────────── per-user Docker network lwp-vpn-<uid> ────────────────┐
 │                                                                             │
 │  ┌ VPN gateway (alias: vpn) ─────────┐      ┌ Firefox session ┐             │
-│  │ ttyd ── tmux ── openconnect       │◄─────│ SOCKS5 vpn:1080 │             │
+│  │ GTK4/libadwaita GUI ── openconnect│◄─────│ SOCKS5 vpn:1080 │             │
 │  │            └── ocproxy :1080      │      └─────────────────┘             │
 │  │        (userspace lwIP, no tun,   │      ┌ Terminal session ┐            │
 │  │         no NET_ADMIN, no root)    │◄─────│ ALL_PROXY / ssh  │            │
@@ -27,19 +27,24 @@ privileged containers.
   **`vpn`** — every user's apps reach *their own* tunnel at the same address,
   `socks5h://vpn:1080`, with no possibility of cross-user access (Docker DNS
   aliases are scoped per network).
-- The login is **interactive** (ttyd terminal): password + TOTP, or whatever
-  the portal asks. No VPN credentials are ever stored server-side.
-- The connect loop runs inside **tmux**: minimising the window, reloading the
-  page, or closing the tab does *not* drop the tunnel. Reopening the window
-  reattaches to the same terminal.
+- The login is a **native desktop app** (`lwp-vpn-gui.py`, GTK4 + libadwaita,
+  `FROM lwp-kasm-base` — same stack as `containers/sshpilot`), not a terminal:
+  a form for portal/username/password/OTP/protocol, a status pill, and a
+  collapsible connection log. It spawns `openconnect` itself and feeds it
+  credentials over stdin. No VPN credentials are ever stored server-side.
+- Like every other KasmVNC-based app image in this repo, the session persists
+  server-side independent of the browser connection — reloading the page or
+  losing the connection does *not* drop the tunnel. Only closing the app
+  window (or clicking Disconnect inside it) ends the session; closing while
+  connected prompts for confirmation first.
 
 ## User flow
 
 1. Launch **VPN** from the catalog and log in (password + TOTP).
 2. On connect the window minimises itself; the taskbar shows a **shield**:
    pulsing amber = gateway open but not connected, green = tunnel up.
-   Click the shield to bring the terminal back (status, reconnect, Ctrl+C to
-   disconnect).
+   Click the shield to bring the window back (status, reconnect, or click
+   Disconnect).
 3. Launch your apps. Sessions started **while the VPN is up** get a local
    SOCKS5 relay (`lwp-vpn-relay.py`, `127.0.0.1:1081`) and are wired to it
    automatically:
@@ -115,9 +120,9 @@ as the session recorder):
   (owner-referenced to the pod, so it is garbage-collected with it); clients
   get the same proxy env pointing at that Service.
 - A **NetworkPolicy** restricts the SOCKS port to pods with the owning user's
-  `lwp.user` label (the ttyd port stays open for nginx). Enforcement requires
-  a NetworkPolicy-capable CNI (Calico, Cilium, …) — on plain flannel the
-  policy is created but not enforced.
+  `lwp.user` label (the GUI's display port stays open for nginx). Enforcement
+  requires a NetworkPolicy-capable CNI (Calico, Cilium, …) — on plain flannel
+  the policy is created but not enforced.
 
 ## Limitations
 

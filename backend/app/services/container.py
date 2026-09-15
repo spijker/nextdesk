@@ -529,9 +529,9 @@ async def _k8s_start(
             await core.create_namespaced_service(namespace="lwp", body=vpn_svc)
         log.info("Created VPN gateway svc %s for user %s", vpn_svc_name, user_id)
 
-        # Scope the SOCKS port to the owning user's pods (ttyd stays open so
-        # nginx can proxy the terminal). Enforcement requires a CNI with
-        # NetworkPolicy support; creation is best-effort.
+        # Scope the SOCKS port to the owning user's pods (the GUI's display
+        # port stays open so nginx can proxy the app). Enforcement requires a
+        # CNI with NetworkPolicy support; creation is best-effort.
         netpol = k8s.V1NetworkPolicy(
             metadata=k8s.V1ObjectMeta(
                 name=vpn_svc_name,

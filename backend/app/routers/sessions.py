@@ -36,9 +36,9 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 # never inject arbitrary env into containers (LD_PRELOAD & co).
 USER_ENV_WHITELIST = ("LWP_VPN_DEFAULT", "LWP_VPN_EXEMPT")
 
-# ttyd-based apps (Terminal, htop, VPN login) — identified by their fixed
-# ttyd port. The user's font preference (Profile → Terminal appearance) rides
-# in as env; the container's entrypoint turns it into `ttyd -t fontFamily=…`.
+# ttyd-based apps (Terminal, htop) — identified by their fixed ttyd port.
+# The user's font preference (Profile → Terminal appearance) rides in as env;
+# the container's entrypoint turns it into `ttyd -t fontFamily=…`.
 TTYD_PROXY_PORT = 7681
 TERM_FONT_FAMILY_RE = re.compile(r"^[A-Za-z0-9 ,'\-]{1,80}$")
 

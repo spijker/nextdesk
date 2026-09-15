@@ -585,7 +585,7 @@ export function Taskbar({ onExposeOpen }: TaskbarProps) {
               title={
                 vpnConnected
                   ? "VPN connected — toggle the shield on each window to route it through the tunnel (right-click for help)"
-                  : "VPN not connected yet — click to open the login terminal"
+                  : "VPN not connected yet — click to open the login window"
               }
               className={cn(
                 "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg hover:bg-white/10 transition-colors",

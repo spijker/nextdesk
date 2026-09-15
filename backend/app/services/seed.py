@@ -198,20 +198,20 @@ PRESETS = [
         "mount_home": True,
     },
     {
-        # Per-user VPN gateway: userspace OpenConnect (GlobalProtect) + ocproxy.
-        # LWP_VPN_ROLE=gateway makes the orchestrator attach it to the per-user
-        # network with the fixed "vpn" alias; other sessions launched while it
-        # runs get a local relay (ALL_PROXY=socks5h://127.0.0.1:1081) with a
-        # per-window VPN toggle. Admins can preset the portal via env_json:
+        # Per-user VPN gateway: userspace OpenConnect (GlobalProtect) + ocproxy,
+        # behind a GTK4/libadwaita desktop GUI (KasmVNC, same stack as SSHPilot)
+        # — not a terminal. LWP_VPN_ROLE=gateway makes the orchestrator attach
+        # it to the per-user network with the fixed "vpn" alias; other sessions
+        # launched while it runs get a local relay (ALL_PROXY=socks5h://127.0.0.1:1081)
+        # with a per-window VPN toggle. Admins can preset the portal via env_json:
         # LWP_VPN_SERVER / LWP_VPN_USER / LWP_VPN_PROTOCOL.
         "name": "VPN",
         "container_image": "lwp-vpn:latest",
-        "web_native": True,
         "category": "Tools",
         "description": "GlobalProtect VPN (OpenConnect) — log in with password + TOTP; toggle the shield on each app window to route it through the tunnel.",
         "icon_url": "/icons/vpn.svg",
         "app_type": "stream",
-        "proxy_port": 7681,
+        "proxy_port": 8080,
         "cpu_limit": "500m",
         "mem_limit": "256Mi",
         "shm_size": "0",

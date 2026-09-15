@@ -91,8 +91,12 @@ COPY lwp-vpn-relay.py      /usr/local/bin/lwp-vpn-relay.py
 RUN chmod +x /usr/local/bin/lwp-nc-mount.sh /usr/local/bin/lwp-mounts.sh \
              /usr/local/bin/lwp-terminal-entry.sh /usr/local/bin/lwp-vpn-relay.py
 
-# ssh rides the VPN SOCKS proxy automatically when the session runs behind it
+# ssh rides the VPN SOCKS proxy automatically when the session runs behind it.
+# openssh refuses to read a group/world-writable config file ("Bad owner or
+# permissions") — the repo file is 664 (default umask), so force 644 here
+# rather than relying on the checked-in mode.
 COPY lwp-vpn-ssh.conf /etc/ssh/ssh_config.d/60-lwp-vpn.conf
+RUN chmod 644 /etc/ssh/ssh_config.d/60-lwp-vpn.conf
 
 USER lwp
 WORKDIR /home/lwp

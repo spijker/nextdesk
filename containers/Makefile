@@ -74,7 +74,7 @@ opencode: base
 flatpak: base
 	docker build -t $(_pfx)lwp-flatpak:$(TAG) flatpak/
 
-vpn:
+vpn: base
 	docker build -t $(_pfx)lwp-vpn:$(TAG) vpn/
 
 push:
