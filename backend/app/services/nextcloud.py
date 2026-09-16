@@ -209,7 +209,7 @@ def build_webdav_url(url: str, nc_user: str) -> str:
     return f"{base}/remote.php/dav/files/{nc_user}"
 
 
-async def get_user_nc_env(db, user) -> dict:
+async def get_user_nc_env(db, user, home_dir: str = "/home/lwp") -> dict:
     """
     Return env vars to inject into a session container for Nextcloud WebDAV mount.
     Returns {} if NC is not configured for the user.
@@ -240,9 +240,10 @@ async def get_user_nc_env(db, user) -> dict:
         "LWP_NC_URL":   webdav_url,
         "LWP_NC_USER":  nc_user,
         "LWP_NC_PASS":  nc_pass,
-        # xpra containers run as user "lwp"; strip any stale prefix from the
-        # admin-configured path and always mount under /home/lwp/.
-        "LWP_NC_MOUNT": "/home/lwp/" + (
+        # Strip any stale prefix from the admin-configured path and always
+        # mount directly under the session's real home (/home/lwp for our
+        # own images, /config for LinuxServer.io's — see the call site).
+        "LWP_NC_MOUNT": home_dir.rstrip("/") + "/" + (
             os.path.basename((sys_cfg.get("mount_path") or "Files").rstrip("/")) or "Files"
         ),
     }

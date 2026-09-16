@@ -1,4 +1,4 @@
-FROM lwp-kasm-base
+FROM lwp-selkies-base
 
 # Remmina — remote desktop client (RDP + VNC plugins).
 RUN apt-get update && apt-get install -y --no-install-recommends \

@@ -1,0 +1,30 @@
+#!/bin/bash
+# LWP app launcher for the Selkies base image — the base handles its own
+# D-Bus/GTK/WM setup; this only adds the LWP-specific bits kasm-base's
+# xstartup did: passing a file through from "Open with…", and telling the
+# backend to end the session when the app's window closes (LWP is one-app-
+# per-container, not a general-purpose desktop).
+
+# LWP_OPEN_FILE (file manager "Open with…") is passed as the first argument;
+# wait for the rclone Nextcloud mount to expose the file (up to 60s). Only
+# pass it if it actually appeared, so a slow/failed mount doesn't hand the
+# app a bad path (which would just show an empty start screen).
+if [ -n "${LWP_OPEN_FILE:-}" ]; then
+    for _i in $(seq 1 300); do
+        [ -e "${LWP_OPEN_FILE}" ] && break
+        sleep 0.2
+    done
+    if [ -e "${LWP_OPEN_FILE}" ]; then
+        ${LWP_START_APP} "${LWP_OPEN_FILE}"
+    else
+        echo "lwp-autostart: LWP_OPEN_FILE never appeared (${LWP_OPEN_FILE}) — starting without it" >&2
+        ${LWP_START_APP}
+    fi
+else
+    ${LWP_START_APP}
+fi
+
+# App exited — notify backend so it tears the session down instead of
+# leaving a dead-but-"running" container behind.
+curl -sf -X POST "${LWP_BACKEND_URL:-http://backend:8000}/api/sessions/self-stop" \
+    -H "X-Session-Token: ${LWP_SESSION_TOKEN:-}" 2>/dev/null || true

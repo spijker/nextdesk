@@ -1,4 +1,4 @@
-FROM lwp-kasm-base
+FROM lwp-selkies-base
 
 # Vivaldi — Chromium-based browser, snap-free, works in containers
 RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg && \

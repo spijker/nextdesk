@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import json
+import logging
 import os
 import re
 import uuid
@@ -29,12 +31,17 @@ from app.services import nextcloud as nc_svc
 from app.services import policy as policy_svc
 from app.services import quota as quota_svc
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
-# Env vars users may set per app themselves (Profile → App VPN defaults,
+# Env vars users may set per app themselves (Profile → App preferences,
 # stored in user.preferences["app_env"][app_id]). Whitelist only — users must
 # never inject arbitrary env into containers (LD_PRELOAD & co).
-USER_ENV_WHITELIST = ("LWP_VPN_DEFAULT", "LWP_VPN_EXEMPT")
+# SELKIES_UI_SHOW_SIDEBAR passes straight through unchanged (it's the actual
+# Selkies env var name, read once at container start — no live toggle exists,
+# see the base image default in containers/selkies-base/Dockerfile).
+USER_ENV_WHITELIST = ("LWP_VPN_DEFAULT", "LWP_VPN_EXEMPT", "SELKIES_UI_SHOW_SIDEBAR")
 
 # ttyd-based apps (Terminal, htop) — identified by their fixed ttyd port.
 # The user's font preference (Profile → Terminal appearance) rides in as env;
@@ -91,16 +98,19 @@ async def create_session(
     open_path = body.get("open_path")
 
     # Nextcloud mount env — needed up here so "Open with…" can target the real
-    # mount path (admins may rename it from the default /home/lwp/Files).
-    nc_env = await nc_svc.get_user_nc_env(db, user)
-    mount_base = nc_env.get("LWP_NC_MOUNT", "/home/lwp/Files")
+    # mount path (admins may rename it from the default Files). Selkies-based
+    # images keep the user's real home at /config, not /home/lwp — see the
+    # matching container.py comment on the home volume.
+    home_dir = "/config" if app.app_type in container_svc.SELKIES_APP_TYPES else "/home/lwp"
+    nc_env = await nc_svc.get_user_nc_env(db, user, home_dir=home_dir)
+    mount_base = nc_env.get("LWP_NC_MOUNT", f"{home_dir}/Files")
 
     # VNC desktop apps are single-instance per user: a second launch reuses the
     # running session (Firefox, LibreOffice, …). "Open with…" then hands the
     # file to that live session via the container opener agent instead of
     # spawning a duplicate. Checked before the concurrency limit so reusing an
     # open app never counts as a new session.
-    is_vnc_desktop = app.app_type == "stream" and not app.web_native
+    is_vnc_desktop = app.app_type in ("stream", "kasm") and not app.web_native
     # Background-eligible apps (Terminal) with the user's background preference
     # are single-instance too: relaunching reattaches the running session
     # (tmux picks up where it left off) instead of spawning a second container.
@@ -273,7 +283,7 @@ async def create_session(
         if grp_mem and quota_svc.mem_to_bytes(eff_mem) > quota_svc.mem_to_bytes(grp_mem):
             eff_mem = grp_mem
 
-    upstream_host = await container_svc.start(
+    start_kwargs = dict(
         session_id=str(sess.id),
         session_token=token,
         pod_name=pod_name,
@@ -289,8 +299,33 @@ async def create_session(
         mount_home=app.mount_home,
         env_json=effective_env,
         needs_fuse=bool(nc_env) or bool(mount_env),
-        needs_userns=bool(effective_env.get("LWP_FLATPAK_APP_ID")),
     )
+
+    # First launch of an image nginx hasn't pulled yet (a registry image, or a
+    # fresh LinuxServer.io catalog pick) can take minutes — way past nginx's
+    # proxy_read_timeout on /api/. Rather than block the request on the pull
+    # (client sees a 502/504 while the launch actually keeps going server-side
+    # and the browser never learns it succeeded), defer it to a background
+    # task and return "starting" right away; the client polls GET
+    # /api/sessions/{id} until it flips to "running" (or "error" — see
+    # _finish_session_start). upstream_host is deterministic (== pod_name for
+    # Docker; k8s never returns anything else either), so it's safe to set now.
+    if app.app_type != "web" and not await container_svc.image_present(container_image):
+        sess.upstream_host = pod_name
+        await db.commit()
+        await db.refresh(sess)
+        asyncio.create_task(_finish_session_start(
+            start_kwargs=start_kwargs,
+            container_image=container_image,
+            pod_name=pod_name,
+            service_name=sess.service_name,
+            app_name=app.name,
+            user_id=user.id,
+            is_admin=user.is_admin,
+        ))
+        return _session_out(sess, app)
+
+    upstream_host = await container_svc.start(**start_kwargs)
 
     sess.upstream_host = upstream_host
     sess.status = "running"
@@ -303,6 +338,44 @@ async def create_session(
     await db.refresh(sess)
     lwp_sessions_created_total.labels(user_type="admin" if user.is_admin else "user").inc()
     return _session_out(sess, app)
+
+
+async def _finish_session_start(
+    *, start_kwargs: dict, container_image: str, pod_name: str, service_name: str,
+    app_name: str, user_id: uuid.UUID, is_admin: bool,
+) -> None:
+    """Runs the deferred pull+create kicked off above, off its own DB session
+    (the request that spawned this has already responded and torn its own
+    down). Mirrors the synchronous path's status/audit/metric bookkeeping."""
+    from app.database import SessionLocal
+
+    session_id = uuid.UUID(start_kwargs["session_id"])
+    async with SessionLocal() as db:
+        sess = await db.get(Session, session_id)
+        if not sess:
+            return
+        try:
+            upstream_host = await container_svc.start(**start_kwargs)
+        except Exception:
+            log.exception("Deferred launch failed for session %s (image=%s)", session_id, container_image)
+            sess.status = "error"
+            await db.commit()
+            try:
+                await container_svc.stop(pod_name, service_name)
+            except Exception:
+                pass
+            return
+
+        sess.upstream_host = upstream_host
+        sess.status = "running"
+        user = await db.get(User, user_id)
+        await audit_svc.audit(
+            db, action="session.start", user=user,
+            resource=f"app:{app_name}",
+            detail=f"container={container_image} pod={pod_name}",
+        )
+        await db.commit()
+    lwp_sessions_created_total.labels(user_type="admin" if is_admin else "user").inc()
 
 
 @router.post("/{session_id}/heartbeat")
@@ -477,8 +550,9 @@ async def delete_session(
 
     # Mark stopped + commit immediately so the client can close the window at once;
     # the container is torn down in the background (docker/k8s stop can be slow).
-    if sess.app_type != "web":
-        background.add_task(container_svc.stop, sess.pod_name, sess.service_name)
+    # Every app_type gets its own real per-session container (including web —
+    # kiosk launches a fresh one per session, it was never actually shared).
+    background.add_task(container_svc.stop, sess.pod_name, sess.service_name)
 
     sess.status = "stopped"
     sess.ended_at = datetime.now(UTC)
@@ -494,10 +568,15 @@ async def delete_session(
 
 @router.post("/self-stop")
 async def self_stop(
+    background: BackgroundTasks,
     x_session_token: str | None = Header(default=None),
     db: AsyncSession = Depends(get_session),
 ):
-    """Called by the container when the app exits — marks the session stopped."""
+    """Called by the container itself when the app exits — marks the session
+    stopped and tears the container down. Without the latter, the container
+    (app aside) just sits there forever: not orphaned exactly, but leaked —
+    docker stop on a container that's already mid-exit is a harmless no-op,
+    so this is safe to call unconditionally."""
     if not x_session_token:
         return Response(status_code=401)
     result = await db.execute(
@@ -509,6 +588,7 @@ async def self_stop(
     sess = result.scalar_one_or_none()
     if not sess:
         return Response(status_code=404)
+    background.add_task(container_svc.stop, sess.pod_name, sess.service_name)
     sess.status = "stopped"
     sess.ended_at = datetime.now(UTC)
     await db.commit()
@@ -667,7 +747,46 @@ async def validate_session(
 
     resp = Response(status_code=200)
     resp.headers["X-Session-Upstream"] = upstream
+    if sess.app_type in container_svc.SELKIES_APP_TYPES:
+        # Selkies-based images (LinuxServer.io pulls, our own selkies-base
+        # builds, and the shared kiosk browser for app_type=web) serve plain
+        # HTTP and gate their own nginx behind HTTP Basic Auth using exactly
+        # the CUSTOM_USER/PASSWORD env vars container.py launched them with
+        # — not the fixed proxy-tier credential below — so it's recomputed
+        # per session here and forwarded, the same way X-Session-Upstream is.
+        resp.headers["X-Session-Scheme"] = "http"
+        owner = await db.get(User, sess.user_id)
+        if owner:
+            creds = f"{owner.username}:{str(sess.user_id)[:16]}"
+            resp.headers["X-Session-Auth"] = "Basic " + base64.b64encode(creds.encode()).decode()
+    else:
+        # Our own images (lwp-kasm-base's real KasmVNC on :8080, and ttyd's
+        # self-signed HTTPS for stream/web apps) all terminate TLS
+        # themselves and take this same fixed credential — unrelated to any
+        # per-session login, just the proxy tier's fixed default.
+        resp.headers["X-Session-Scheme"] = "https"
+        resp.headers["X-Session-Auth"] = "Basic bHdwOmx3cHZuYw=="
     return resp
+
+
+@router.get("/{session_id}")
+async def get_my_session(
+    session_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Single-session lookup — the client polls this while status is
+    "starting" (deferred image pull, see create_session) instead of
+    re-fetching the whole list every ~1s."""
+    result = await db.execute(
+        select(Session, App).join(App, Session.app_id == App.id, isouter=True)
+        .where(Session.id == session_id, Session.user_id == user.id)
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+    sess, app = row
+    return _session_out(sess, app)
 
 
 # ── Session sharing ──────────────────────────────────────────────────────────

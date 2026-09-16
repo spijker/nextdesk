@@ -1,0 +1,7 @@
+#!/usr/bin/with-contenv bash
+# Per-session SOCKS5 switchboard (127.0.0.1:1081): DIRECT or via the user's
+# VPN gateway, toggled from the window titlebar. Exits when the session was
+# launched without a live gateway (LWP_VPN_UPSTREAM unset) — s6 won't
+# respawn a custom-services.d script that exits 0 quickly on its own accord,
+# same "no-op when unconfigured" shape as the other sidecars here.
+exec s6-setuidgid abc /usr/local/bin/lwp-vpn-relay.py

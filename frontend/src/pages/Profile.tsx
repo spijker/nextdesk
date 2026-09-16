@@ -13,6 +13,7 @@ import { useDesktopStore } from "@/store/desktop";
 import { cn } from "@/lib/utils";
 import { NcAvatar } from "@/components/desktop/NcAvatar";
 import { VNC_DISPLAY_MODES, type VncDisplayMode } from "@/lib/vncDisplay";
+import type { App } from "@/types";
 
 const PRESETS = [
   { label: "Night blue",  value: "linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%)" },
@@ -482,9 +483,16 @@ function AppVpnDefaults() {
     {}) as Record<string, Record<string, string>>;
 
   const save = (appId: string, mode: VpnMode) => {
+    // Merge, don't replace — AppSelkiesDefaults below writes into the same
+    // per-app env object (SELKIES_UI_SHOW_SIDEBAR) and a full replace here
+    // would silently wipe that setting out from under it.
     const next = { ...appEnv };
+    const rest = { ...next[appId] };
+    delete rest.LWP_VPN_DEFAULT;
+    delete rest.LWP_VPN_EXEMPT;
     const env = envOfVpnMode(mode);
-    if (env) next[appId] = env; else delete next[appId];
+    const merged = { ...rest, ...(env || {}) };
+    if (Object.keys(merged).length) next[appId] = merged; else delete next[appId];
     client.patch("/api/auth/me/preferences", { app_env: next }).catch(() => {});
     if (user) setUser({ ...user, preferences: { ...(user.preferences || {}), app_env: next } });
   };
@@ -521,6 +529,215 @@ function AppVpnDefaults() {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+// ── Selkies menu (per app, default off) ───────────────────────────────────────
+// Selkies' own sidebar (display/audio/stats/sharing settings) is hidden by
+// default (containers/selkies-base/Dockerfile) since it reads as a second,
+// redundant title bar stacked on our own window chrome. It's a server env
+// var Selkies reads once at container start — no live toggle exists, so
+// flipping this only takes effect on that app's *next* launch.
+function AppSelkiesDefaults() {
+  const user = useAuthStore((s) => s.user);
+  const setUser = useAuthStore((s) => s.setUser);
+  const { data: apps = [] } = useQuery<{ id: string; name: string; icon_url: string; app_type: string }[]>({
+    queryKey: ["apps"],
+    queryFn: () => client.get("/api/apps").then((r) => r.data),
+  });
+
+  const appEnv = ((user?.preferences as Record<string, unknown> | undefined)?.app_env ??
+    {}) as Record<string, Record<string, string>>;
+
+  const rows = apps.filter((a) => a.app_type === "kasm");
+  if (!rows.length) return null;
+
+  const isOn = (appId: string) =>
+    (appEnv[appId]?.SELKIES_UI_SHOW_SIDEBAR || "").toLowerCase() === "true";
+
+  const toggle = (appId: string, on: boolean) => {
+    const next = { ...appEnv };
+    const rest = { ...next[appId] };
+    if (on) rest.SELKIES_UI_SHOW_SIDEBAR = "true"; else delete rest.SELKIES_UI_SHOW_SIDEBAR;
+    if (Object.keys(rest).length) next[appId] = rest; else delete next[appId];
+    client.patch("/api/auth/me/preferences", { app_env: next }).catch(() => {});
+    if (user) setUser({ ...user, preferences: { ...(user.preferences || {}), app_env: next } });
+  };
+
+  return (
+    <div className={CARD + " space-y-4"}>
+      <h2 className="font-semibold flex items-center gap-2"><SlidersHorizontal className="h-4 w-4" /> Selkies menu</h2>
+      <p className="text-xs text-gray-400">
+        Off by default. When on, that app's window shows Selkies' own sidebar
+        (video/audio/stats/sharing settings) alongside ours. Applied when a
+        session <em>starts</em> — relaunch that app to pick up a change.
+      </p>
+      <ul className="space-y-1.5">
+        {rows.map((a) => (
+          <li key={a.id} className="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2 dark:border-gray-700">
+            {a.icon_url
+              ? <img src={a.icon_url} alt="" className="h-5 w-5 shrink-0 object-contain" />
+              : <Monitor className="h-4 w-4 shrink-0 text-gray-400" />}
+            <span className="min-w-0 flex-1 truncate text-sm">{a.name}</span>
+            <label className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+              <input
+                type="checkbox"
+                checked={isOn(a.id)}
+                onChange={(e) => toggle(a.id, e.target.checked)}
+                className="rounded"
+              />
+              Show
+            </label>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// ── My web apps (self-service kiosk shortcuts) ────────────────────────────────
+// A lightweight alternative to the admin App Catalog: just a name + URL,
+// opened through the shared kiosk browser (POST /api/apps/personal). Visible
+// only to the creator (app.created_by), who can also edit/delete it —
+// anything admin-created has created_by=null and doesn't show up here.
+interface PersonalAppForm { name: string; web_url: string; icon_url: string }
+const EMPTY_PERSONAL_APP: PersonalAppForm = { name: "", web_url: "", icon_url: "" };
+
+function MyWebApps() {
+  const user = useAuthStore((s) => s.user);
+  const qc = useQueryClient();
+  const { data: apps = [] } = useQuery<App[]>({
+    queryKey: ["apps"],
+    queryFn: () => client.get("/api/apps").then((r) => r.data),
+  });
+  const mine = apps.filter((a) => a.created_by === user?.id);
+
+  const [editing, setEditing] = useState<string | "new" | null>(null);
+  const [form, setForm] = useState<PersonalAppForm>(EMPTY_PERSONAL_APP);
+  const [err, setErr] = useState("");
+
+  const startNew = () => { setForm(EMPTY_PERSONAL_APP); setErr(""); setEditing("new"); };
+  const startEdit = (a: App) => {
+    setForm({ name: a.name, web_url: a.web_url || "", icon_url: a.icon_url || "" });
+    setErr("");
+    setEditing(a.id);
+  };
+
+  const save = useMutation({
+    mutationFn: () =>
+      editing === "new"
+        ? client.post("/api/apps/personal", form)
+        : client.put(`/api/apps/personal/${editing}`, form),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["apps"] });
+      toast.success(editing === "new" ? "Web app added" : "Web app updated");
+      setEditing(null);
+    },
+    onError: (e: any) => setErr(e.response?.data?.detail ?? "Save failed"),
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => client.delete(`/api/apps/personal/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["apps"] });
+      toast.success("Web app removed");
+    },
+  });
+
+  return (
+    <div className={CARD + " space-y-4"}>
+      <div className="flex items-center justify-between">
+        <h2 className="font-semibold flex items-center gap-2"><LayoutGrid className="h-4 w-4" /> My web apps</h2>
+        {editing === null && (
+          <button
+            onClick={startNew}
+            className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-gray-400">
+        Shortcuts only you can see, opened in a full-screen browser — a
+        dashboard, an internal tool, anything with a URL. For apps everyone
+        should see, ask an admin to add it to the catalog instead.
+      </p>
+
+      {editing !== null && (
+        <div className="space-y-3 rounded-xl border border-gray-200 p-4 dark:border-gray-700">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">Name</label>
+            <input
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              placeholder="e.g. Grafana"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">URL</label>
+            <input
+              value={form.web_url}
+              onChange={(e) => setForm((f) => ({ ...f, web_url: e.target.value }))}
+              placeholder="https://…"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">Icon URL (optional)</label>
+            <input
+              value={form.icon_url}
+              onChange={(e) => setForm((f) => ({ ...f, icon_url: e.target.value }))}
+              placeholder="https://…/icon.png"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800"
+            />
+          </div>
+          {err && <p className="text-xs text-red-500">{err}</p>}
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setEditing(null)}
+              className="rounded-lg px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => { setErr(""); save.mutate(); }}
+              disabled={!form.name.trim() || !form.web_url.trim() || save.isPending}
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+            >
+              {save.isPending ? "Saving…" : editing === "new" ? "Create" : "Save"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mine.length === 0 && editing === null ? (
+        <p className="text-xs text-gray-400">None yet.</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {mine.map((a) => (
+            <li key={a.id} className="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2 dark:border-gray-700">
+              {a.icon_url
+                ? <img src={a.icon_url} alt="" className="h-5 w-5 shrink-0 object-contain" />
+                : <Monitor className="h-4 w-4 shrink-0 text-gray-400" />}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm">{a.name}</p>
+                <p className="truncate text-xs text-gray-400">{a.web_url}</p>
+              </div>
+              <button onClick={() => startEdit(a)} className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => window.confirm(`Remove "${a.name}"?`) && remove.mutate(a.id)}
+                className="text-gray-400 hover:text-red-500"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -933,7 +1150,9 @@ export default function Profile() {
           {page === "preferences" && (
             <>
               <PreferencesSection />
+              <MyWebApps />
               <AppVpnDefaults />
+              <AppSelkiesDefaults />
             </>
           )}
           {page === "activity" && <RecentActivity />}

@@ -1,10 +1,16 @@
 # Tuning — Audio, Storage, Video, Performance
 
-## Audio
+> Most desktop apps (`app_type=kasm`) now run on Selkies, not KasmVNC — see
+> [architecture.md](architecture.md#volume-control) for how audio/volume
+> actually works there (native, no separate stream). The Audio, Video and
+> Clipboard sections below describe the **legacy `lwp-kasm-base` path**
+> (currently only the `vpn` app), kept for reference until it's fully retired.
+
+## Audio (legacy KasmVNC only)
 
 ### How it works
 
-Each VNC container runs a PulseAudio daemon with a **null sink** (virtual output). **KasmVNC 1.4's web client cannot play session audio standalone** (it delegates to a Kasm Workspaces parent frame), so LWP streams audio itself over an independent channel:
+Each KasmVNC container runs a PulseAudio daemon with a **null sink** (virtual output). **KasmVNC 1.4's web client cannot play session audio standalone** (it delegates to a Kasm Workspaces parent frame), so LWP streams audio itself over an independent channel:
 
 ```
 PulseAudio sink monitor
@@ -119,7 +125,13 @@ The credentials are decrypted at session launch and passed as env vars to the co
 
 ## Persistent home directory
 
-If `mount_home` is enabled on an app, LWP creates a Docker named volume `lwp-home-{user_id}` and mounts it at `/home/lwp` inside the container. This volume:
+If `mount_home` is enabled on an app, LWP creates a Docker named volume and
+mounts it into the container:
+- `app_type=kasm`/`web` (Selkies): `lwp-config-{user_id}-{image-slug}` at
+  `/config` — per-(user, image), following the LinuxServer.io convention
+- everything else (legacy `stream`/kasm-base): `lwp-home-{user_id}` at `/home/lwp`
+
+This volume:
 - Persists across session restarts and container rebuilds
 - Is **local to the Docker host** (dev) or requires `ReadWriteOnce` PVC (K8s)
 - Is distinct from the Nextcloud mount
@@ -128,7 +140,7 @@ For multi-node K8s deployments, use a `ReadWriteMany` StorageClass (NFS, CephFS,
 
 ---
 
-## Video & Display
+## Video & Display (legacy KasmVNC only — Selkies apps use pixelflux, see [architecture.md](architecture.md))
 
 ### YouTube / video playback
 
@@ -183,7 +195,7 @@ command_line:
 
 ---
 
-## Clipboard
+## Clipboard (legacy KasmVNC only — Selkies has its own native clipboard integration)
 
 Bidirectional clipboard works in **Chrome and Edge** (secure context / HTTPS required). Firefox may prompt for clipboard permission on first paste.
 

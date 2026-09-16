@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { Monitor, Users, LayoutGrid, Activity } from "lucide-react";
+import { Monitor, Users, LayoutGrid, Activity, HardDrive, Cpu, MemoryStick, Box } from "lucide-react";
 import client from "@/api/client";
 import type { AdminSession } from "@/types";
+import { cn } from "@/lib/utils";
 
 interface Stats {
   active_sessions: number;
@@ -10,10 +11,52 @@ interface Stats {
   total_apps: number;
 }
 
+interface HostStats {
+  available: boolean;
+  cpu?: { cores: number; load1: number; load5: number; load15: number };
+  mem?: { total_bytes: number; available_bytes: number; used_bytes: number };
+  disk?: { total_bytes: number; used_bytes: number; free_bytes: number; images_bytes: number };
+  containers?: { running: number; total: number };
+}
+
+function fmtBytes(n: number): string {
+  const gb = n / 1e9;
+  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(n / 1e6).toFixed(0)} MB`;
+}
+
+function MeterCard({
+  icon: Icon, label, value, sub, pct, warn,
+}: {
+  icon: React.ElementType; label: string; value: string; sub: string; pct: number; warn?: boolean;
+}) {
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-900">
+      <div className="mb-3 flex items-center gap-2 text-gray-400">
+        <Icon className="h-4 w-4" />
+        <span className="text-xs font-medium uppercase tracking-wide">{label}</span>
+      </div>
+      <p className={cn("text-2xl font-bold", warn && "text-red-500")}>{value}</p>
+      <p className="mb-2 text-xs text-gray-500">{sub}</p>
+      <div className="h-1.5 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
+        <div
+          className={cn("h-full rounded-full", warn ? "bg-red-500" : "bg-indigo-500")}
+          style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function AdminDashboard() {
   const { data: stats } = useQuery<Stats>({
     queryKey: ["admin", "stats"],
     queryFn: () => client.get("/api/admin/stats").then((r) => r.data),
+    refetchInterval: 15_000,
+  });
+
+  const { data: host } = useQuery<HostStats>({
+    queryKey: ["admin", "stats", "host"],
+    queryFn: () => client.get("/api/admin/stats/host").then((r) => r.data),
     refetchInterval: 15_000,
   });
 
@@ -30,11 +73,15 @@ export default function AdminDashboard() {
     { label: "Active Apps",      value: stats?.total_apps    ?? "—",    icon: LayoutGrid, color: "text-orange-500 bg-orange-50 dark:bg-orange-900/20" },
   ];
 
+  const diskPct = host?.disk ? (host.disk.used_bytes / host.disk.total_bytes) * 100 : 0;
+  const memPct = host?.mem ? (host.mem.used_bytes / host.mem.total_bytes) * 100 : 0;
+  const loadPct = host?.cpu ? (host.cpu.load1 / host.cpu.cores) * 100 : 0;
+
   return (
     <div>
       <h1 className="mb-6 text-2xl font-bold">Admin Dashboard</h1>
 
-      <div className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
         {statCards.map(({ label, value, icon: Icon, color }) => (
           <div key={label} className="flex items-center gap-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-900">
             <div className={`rounded-xl p-3 ${color}`}>
@@ -47,6 +94,34 @@ export default function AdminDashboard() {
           </div>
         ))}
       </div>
+
+      {host?.available && (
+        <>
+          <h2 className="mb-3 text-lg font-semibold">Host</h2>
+          <div className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
+            <MeterCard
+              icon={HardDrive} label="Disk" pct={diskPct} warn={diskPct > 90}
+              value={fmtBytes(host.disk!.free_bytes)}
+              sub={`free of ${fmtBytes(host.disk!.total_bytes)} — images ${fmtBytes(host.disk!.images_bytes)}`}
+            />
+            <MeterCard
+              icon={Cpu} label="CPU load" pct={loadPct} warn={loadPct > 90}
+              value={host.cpu!.load1.toFixed(2)}
+              sub={`${host.cpu!.cores}-core avg, ${host.cpu!.load5.toFixed(2)} / 5m`}
+            />
+            <MeterCard
+              icon={MemoryStick} label="Memory" pct={memPct} warn={memPct > 90}
+              value={fmtBytes(host.mem!.used_bytes)}
+              sub={`of ${fmtBytes(host.mem!.total_bytes)} used`}
+            />
+            <MeterCard
+              icon={Box} label="Containers" pct={(host.containers!.running / Math.max(1, host.containers!.total)) * 100}
+              value={String(host.containers!.running)}
+              sub={`running of ${host.containers!.total} total`}
+            />
+          </div>
+        </>
+      )}
 
       <h2 className="mb-3 text-lg font-semibold">Live Sessions</h2>
       <div className="overflow-hidden rounded-2xl border border-gray-200 dark:border-gray-700">

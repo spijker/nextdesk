@@ -1,0 +1,3 @@
+#!/usr/bin/with-contenv bash
+# Polls the backend and opens "Open with…" files in the running app instance.
+exec s6-setuidgid abc /usr/local/bin/lwp-opener.sh

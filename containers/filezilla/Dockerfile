@@ -1,4 +1,4 @@
-FROM lwp-kasm-base
+FROM lwp-selkies-base
 
 # FileZilla — cross-platform FTP/SFTP client (Ubuntu universe).
 RUN apt-get update && apt-get install -y --no-install-recommends \

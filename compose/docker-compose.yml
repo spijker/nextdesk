@@ -66,6 +66,12 @@ services:
     volumes:
       - ../backend:/app
       - /var/run/docker.sock:/var/run/docker.sock
+      # Read-only, same path both sides — admin/apps.py's disk-usage check
+      # calls `docker info` for DockerRootDir then shutil.disk_usage() on it,
+      # which only resolves if that path also exists in *this* container's
+      # own mount namespace (the socket alone only gets you the daemon's
+      # view, not its filesystem).
+      - /home/var/lib/docker:/home/var/lib/docker:ro
       - recordings:/data/recordings
     depends_on:
       postgres:

@@ -1,4 +1,4 @@
-FROM lwp-kasm-base
+FROM lwp-selkies-base
 
 # Firefox from Mozilla (no snap, no Chrome sandbox issues)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -9,6 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && tar -xf /tmp/firefox.tar.xz -C /opt/ \
     && ln -s /opt/firefox/firefox /usr/local/bin/firefox \
     && rm /tmp/firefox.tar.xz
+
+# web-type sessions have no persistent home (mount_home=false, ephemeral
+# profile every launch) — a per-user prefs.js tweak would never survive to
+# the next launch anyway. Baking the policy into the image is what actually
+# suppresses "Welcome to Firefox" every single time, regardless of storage.
+RUN mkdir -p /opt/firefox/distribution
+COPY policies.json /opt/firefox/distribution/policies.json
 
 ENV MOZ_DISABLE_RDD_SANDBOX=1
 

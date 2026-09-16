@@ -1,4 +1,4 @@
-FROM lwp-kasm-base
+FROM lwp-selkies-base
 
 # GUI terminal + the same CLI tooling as the ttyd terminal image
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -48,7 +48,7 @@ RUN mkdir -p "$NVM_DIR" && \
     bash -c '. "$NVM_DIR/nvm.sh" && nvm install --lts && \
              ln -s "$NVM_DIR/versions/node/$(node -v)" "$NVM_DIR/current" && \
              npm install -g opencode-ai' && \
-    chown -R lwp:lwp "$NVM_DIR" && \
+    chown -R abc:abc "$NVM_DIR" && \
     printf 'export NVM_DIR=/opt/nvm\n[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"\n' \
         > /etc/profile.d/nvm.sh && \
     echo '. /etc/profile.d/nvm.sh' >> /etc/bash.bashrc

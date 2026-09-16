@@ -40,6 +40,9 @@ export interface App {
   is_vpn?: boolean;
   // App may keep running in the background when the user opted in (Terminal)
   bg_allowed?: boolean;
+  // Set only for a user's own self-service web app (Profile → My web apps) —
+  // that user's id, letting the UI show edit/delete controls just for them.
+  created_by?: string | null;
 }
 
 export interface Session {

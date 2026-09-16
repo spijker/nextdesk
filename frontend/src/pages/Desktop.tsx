@@ -270,7 +270,12 @@ export default function Desktop() {
   const { data: sessions = [], isSuccess: sessionsLoaded } = useQuery<Session[]>({
     queryKey: ["sessions"],
     queryFn: () => client.get("/api/sessions").then((r) => r.data),
-    refetchInterval: 30_000,
+    // Drives the auto-close-on-app-exit effect below — at 30s a user closing
+    // the app inside a window could sit looking at a dead frame for a while
+    // first (or see the unrelated "Connection lost" overlay race ahead of
+    // it). 5s keeps that gap tight without meaningfully raising server load
+    // (this is a cheap, indexed, per-user query).
+    refetchInterval: 5_000,
   });
 
   const { data: apps = [] } = useQuery<App[]>({

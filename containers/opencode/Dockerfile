@@ -1,4 +1,4 @@
-FROM lwp-kasm-base
+FROM lwp-selkies-base
 
 # OpenCode desktop (Electron) — AI coding agent, from the official .deb.
 # apt-get install of the local .deb pulls the Electron runtime deps.

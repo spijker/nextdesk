@@ -1,4 +1,4 @@
-FROM lwp-kasm-base
+FROM lwp-selkies-base
 
 # Headlamp — Kubernetes UI desktop app (Electron), from the official .deb.
 # Installs to /opt/Headlamp/headlamp (no /usr/bin symlink); apt resolves deps.

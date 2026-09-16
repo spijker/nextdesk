@@ -1,4 +1,4 @@
-FROM lwp-kasm-base
+FROM lwp-selkies-base
 
 # Ubuntu 24.04 ships `thunderbird` only as a snap transitional package (pulls
 # snapd; can't run in a container). Install the real build straight from

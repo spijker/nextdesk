@@ -1,12 +1,150 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Plus, Pencil, Trash2, ToggleLeft, ToggleRight, X, ChevronDown, ChevronUp,
+  Download, HardDrive, Loader2, Check,
 } from "lucide-react";
 import { toast } from "sonner";
 import client from "@/api/client";
 import type { App } from "@/types";
 import { cn } from "@/lib/utils";
+
+// ── Access control (restrict an app to groups/people) ───────────────────────
+
+interface AdminGroup { id: string; name: string }
+interface AdminUser { id: string; email: string; display_name: string; username: string }
+
+function MultiPicker({
+  label, options, selected, onChange,
+}: {
+  label: string;
+  options: { id: string; label: string }[];
+  selected: string[];
+  onChange(ids: string[]): void;
+}) {
+  const toggle = (id: string) =>
+    onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+  return (
+    <div>
+      <p className="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">{label}</p>
+      {options.length === 0 ? (
+        <p className="text-xs text-gray-400">None yet.</p>
+      ) : (
+        <div className="max-h-32 space-y-0.5 overflow-y-auto rounded-lg border border-gray-200 p-1.5 dark:border-gray-700">
+          {options.map((o) => (
+            <label
+              key={o.id}
+              className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-gray-50 dark:hover:bg-gray-800"
+            >
+              <input
+                type="checkbox"
+                checked={selected.includes(o.id)}
+                onChange={() => toggle(o.id)}
+                className="rounded"
+              />
+              <span className="truncate">{o.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Local storage (Docker host disk) — full host stats live on the ─────────
+// Dashboard; this is just the compact "is there room to pull?" read-out,
+// pulled from the same endpoint so there's one place computing it.
+
+interface HostStats {
+  available: boolean;
+  disk?: { total_bytes: number; used_bytes: number; free_bytes: number; images_bytes: number };
+}
+
+function fmtBytes(n: number): string {
+  const gb = n / 1e9;
+  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(n / 1e6).toFixed(0)} MB`;
+}
+
+function StorageIndicator() {
+  const { data } = useQuery<HostStats>({
+    queryKey: ["admin", "stats", "host"],
+    queryFn: () => client.get("/api/admin/stats/host").then((r) => r.data),
+    refetchInterval: 30_000,
+  });
+  const disk = data?.disk;
+  if (!data?.available || !disk) return null;
+  const usedPct = Math.min(100, (disk.used_bytes / disk.total_bytes) * 100);
+  const low = disk.free_bytes < 10e9; // under 10 GB free
+  return (
+    <div
+      className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs dark:border-gray-700 dark:bg-gray-900"
+      title={`Images: ${fmtBytes(disk.images_bytes)}`}
+    >
+      <HardDrive className={cn("h-4 w-4", low ? "text-red-500" : "text-gray-400")} />
+      <div className="w-28">
+        <div className="h-1.5 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
+          <div
+            className={cn("h-full rounded-full", low ? "bg-red-500" : "bg-indigo-500")}
+            style={{ width: `${usedPct}%` }}
+          />
+        </div>
+      </div>
+      <span className={cn("text-gray-500 dark:text-gray-400", low && "font-semibold text-red-500")}>
+        {fmtBytes(disk.free_bytes)} free of {fmtBytes(disk.total_bytes)}
+      </span>
+    </div>
+  );
+}
+
+// ── Predownload (warm an app's image so a user's first launch is instant) ───
+
+interface PullStatus { status: "pending" | "pulling" | "done" | "error"; detail?: string }
+
+function PredownloadButton({ app, missing }: { app: App; missing: boolean }) {
+  const qc = useQueryClient();
+  const { data: pull } = useQuery<PullStatus>({
+    queryKey: ["admin", "apps", app.id, "pull"],
+    queryFn: () => client.get(`/api/admin/apps/${app.id}/pull`).then((r) => r.data),
+    refetchInterval: (q) => (q.state.data?.status === "pulling" ? 2000 : false),
+  });
+
+  const start = useMutation({
+    mutationFn: () => client.post(`/api/admin/apps/${app.id}/pull`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "apps", app.id, "pull"] }),
+    onError: () => toast.error("Couldn't start the pull"),
+  });
+
+  useEffect(() => {
+    if (pull?.status === "done") {
+      qc.invalidateQueries({ queryKey: ["admin", "apps", "staleness"] });
+      toast.success(`${app.name} image ready locally`);
+    } else if (pull?.status === "error") {
+      toast.error(`Pull failed: ${pull.detail?.slice(0, 120) ?? "unknown error"}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pull?.status]);
+
+  if (pull?.status === "pulling") {
+    return (
+      <span className="flex items-center gap-1 text-[10px] text-gray-400" title={pull.detail}>
+        <Loader2 className="h-3 w-3 animate-spin" /> pulling…
+      </span>
+    );
+  }
+  if (pull?.status === "done" && !missing) {
+    return <Check className="h-3.5 w-3.5 text-green-500" />;
+  }
+  return (
+    <button
+      onClick={() => start.mutate()}
+      disabled={start.isPending}
+      title="Predownload image now"
+      className="text-gray-400 hover:text-indigo-500 disabled:opacity-50"
+    >
+      <Download className="h-3.5 w-3.5" />
+    </button>
+  );
+}
 
 // ── Preset catalogue ──────────────────────────────────────────────────────────
 
@@ -140,7 +278,7 @@ const TYPE_COLORS: Record<string, string> = {
   web:    "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
   kasm:   "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
 };
-const TYPE_LABELS: Record<string, string> = { stream: "VNC app", web: "Web app", kasm: "LinuxServer.io" };
+const TYPE_LABELS: Record<string, string> = { stream: "VNC app", web: "Web app", kasm: "Selkies" };
 
 // ── AppField — defined outside AppModal so React never remounts it on re-render ──
 
@@ -311,11 +449,37 @@ function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
     });
   };
 
+  // ── Access — restrict to specific groups/people (empty = everyone) ───────
+  const [groupIds, setGroupIds] = useState<string[]>([]);
+  const [userIds, setUserIds] = useState<string[]>([]);
+
+  const { data: groups = [] } = useQuery<AdminGroup[]>({
+    queryKey: ["admin", "groups"],
+    queryFn: () => client.get("/api/admin/groups").then((r) => r.data),
+  });
+  const { data: adminUsers = [] } = useQuery<AdminUser[]>({
+    queryKey: ["admin", "users"],
+    queryFn: () => client.get("/api/admin/users").then((r) => r.data),
+  });
+  const { data: currentPerms } = useQuery<{ group_ids: string[]; user_ids: string[] }>({
+    queryKey: ["admin", "apps", !isNew && (app as App).id, "permissions"],
+    queryFn: () => client.get(`/api/admin/apps/${(app as App).id}/permissions`).then((r) => r.data),
+    enabled: !isNew,
+  });
+  useEffect(() => {
+    if (currentPerms) { setGroupIds(currentPerms.group_ids); setUserIds(currentPerms.user_ids); }
+  }, [currentPerms]);
+
   const save = useMutation({
-    mutationFn: () =>
-      isNew
-        ? client.post("/api/admin/apps", form)
-        : client.put(`/api/admin/apps/${(app as App).id}`, form),
+    mutationFn: async () => {
+      const res = isNew
+        ? await client.post("/api/admin/apps", form)
+        : await client.put(`/api/admin/apps/${(app as App).id}`, form);
+      await client.put(`/api/admin/apps/${res.data.id}/permissions`, {
+        group_ids: groupIds, user_ids: userIds,
+      });
+      return res;
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "apps"] });
       toast.success(isNew ? "App created" : "App updated");
@@ -332,16 +496,26 @@ function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div
-        className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-gray-900"
+        className="relative flex max-h-[90vh] min-h-[420px] w-full max-w-xl min-w-[380px] resize flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-gray-900"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-gray-800">
-          <h2 className="text-base font-bold">{isNew ? "Add app" : `Edit — ${(app as App).name}`}</h2>
-          <button onClick={onClose}><X className="h-5 w-5 text-gray-400" /></button>
+          <h2 className="text-base font-bold pr-8">{isNew ? "Add app" : `Edit — ${(app as App).name}`}</h2>
         </div>
 
-        <div className="overflow-y-auto p-6 space-y-5">
+        {/* Close — pinned to the card's corner like a window titlebar, not
+            inline with the header text (which truncates/wraps independently
+            as the card is resized). */}
+        <button
+          onClick={onClose}
+          title="Close"
+          className="absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+        >
+          <X className="h-4 w-4" />
+        </button>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-5">
 
           {/* Type switcher */}
           <div>
@@ -602,6 +776,27 @@ function AppModal({ app, onClose }: { app: App | "new"; onClose(): void }) {
             </div>
           )}
 
+          {/* Access — restrict to specific groups/people (empty = everyone) */}
+          <div>
+            <p className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">
+              Access {groupIds.length + userIds.length === 0 && <span className="font-normal text-gray-400">— everyone</span>}
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <MultiPicker
+                label="Groups"
+                options={groups.map((g) => ({ id: g.id, label: g.name }))}
+                selected={groupIds}
+                onChange={setGroupIds}
+              />
+              <MultiPicker
+                label="People"
+                options={adminUsers.map((u) => ({ id: u.id, label: u.display_name || u.username }))}
+                selected={userIds}
+                onChange={setUserIds}
+              />
+            </div>
+          </div>
+
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -682,9 +877,15 @@ export default function AdminApps() {
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">App Catalog</h1>
-        <div className="flex items-center gap-2">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">App Catalog</h1>
+          <p className="text-sm text-gray-500">
+            {apps.length} app{apps.length === 1 ? "" : "s"} configured
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <StorageIndicator />
           <button
             onClick={() => checkNow.mutate()}
             disabled={checkNow.isPending}
@@ -746,9 +947,17 @@ export default function AdminApps() {
                   )}
                 </td>
                 <td className="px-4 py-3 max-w-[220px] font-mono text-xs text-gray-400">
-                  <span className="block truncate">
-                    {a.container_image || a.web_url || "—"}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="block flex-1 truncate">
+                      {a.container_image || a.web_url || "—"}
+                    </span>
+                    {a.container_image && a.app_type !== "web" && (
+                      <PredownloadButton
+                        app={a}
+                        missing={staleness?.images?.[a.container_image]?.status === "missing"}
+                      />
+                    )}
+                  </div>
                   {a.container_image && staleness?.images?.[a.container_image]?.status === "stale" && (
                     <span className="mt-0.5 inline-block rounded-full bg-amber-100 px-2 py-0.5 font-sans text-[10px] font-medium text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
                       update available

@@ -1,0 +1,4 @@
+#!/usr/bin/with-contenv bash
+# Mounts the user's extra SFTP/S3 storages under ~/Mount/<name> (rclone).
+# No-op (sleeps) when LWP_MOUNTS is unset.
+exec s6-setuidgid abc /usr/local/bin/lwp-mounts.sh

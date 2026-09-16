@@ -1,4 +1,4 @@
-FROM lwp-kasm-base
+FROM lwp-selkies-base
 
 # Install Firefox directly from Mozilla — avoids APT repo GPG issues.
 # The download URL redirects to the latest stable release tarball.

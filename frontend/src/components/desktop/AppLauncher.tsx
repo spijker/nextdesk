@@ -82,6 +82,10 @@ export function AppLauncher({ onClose }: { onClose(): void }) {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [appCtx, setAppCtx] = useState<{ app: App; x: number; y: number } | null>(null);
+  // Dragging an app row out to the taskbar crosses the panel's own edge
+  // mid-drag — without this guard that would close the launcher and cancel
+  // the drop. dragstart/dragend bubble up from AppRow, no prop drilling needed.
+  const [dragging, setDragging] = useState(false);
   const {
     openWindow, windows, addPinned, removePinned, pinned,
     setLaunching, setFileManagerOpen,
@@ -191,6 +195,9 @@ export function AppLauncher({ onClose }: { onClose(): void }) {
         className="fixed bottom-14 left-2 z-[8999] w-[min(560px,calc(100vw-1rem))]"
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
+        onDragStart={() => setDragging(true)}
+        onDragEnd={() => setDragging(false)}
+        onMouseLeave={() => { if (!dragging) onClose(); }}
       >
         <div className="flex h-[520px] max-h-[calc(100vh-5rem)] flex-col overflow-hidden rounded-2xl bg-black/85 shadow-2xl backdrop-blur-xl ring-1 ring-white/10">
           {/* Search */}

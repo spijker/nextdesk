@@ -8,11 +8,20 @@ Returns upstream_host string used by Nginx session proxy.
 """
 import asyncio
 import logging
+import re
 from urllib.parse import urlparse
 
 from app.config import settings
 
 log = logging.getLogger(__name__)
+
+# app_type values whose container is a Selkies-based image (LinuxServer.io
+# pulls, our own selkies-base builds, and — now that lwp-kiosk is rebased —
+# the shared web-app browser launcher too): plain HTTP behind per-session
+# CUSTOM_USER/PASSWORD, real home at /config. Everything else (our
+# kasm-base/ttyd images) terminates its own TLS with a fixed credential and
+# keeps state at /home/lwp — see validate_session and _docker_start_sync.
+SELKIES_APP_TYPES = ("kasm", "web")
 
 # ── Per-user VPN gateway ──────────────────────────────────────────────────────
 # An app whose env_json sets LWP_VPN_ROLE=gateway (the lwp-vpn image) acts as a
@@ -80,7 +89,6 @@ async def start(
     mount_home: bool,
     env_json: dict,
     needs_fuse: bool = False,
-    needs_userns: bool = False,
 ) -> str:
     """Launch a container for a session. Returns the upstream host:port string."""
     if settings.is_dev:
@@ -96,7 +104,6 @@ async def start(
             env_json=env_json,
             mount_home=mount_home,
             needs_fuse=needs_fuse,
-            needs_userns=needs_userns,
         )
     else:
         return await _k8s_start(
@@ -115,7 +122,6 @@ async def start(
             mount_home=mount_home,
             env_json=env_json,
             needs_fuse=needs_fuse,
-            needs_userns=needs_userns,
         )
 
 
@@ -138,6 +144,25 @@ async def resume(pod_name: str, service_name: str) -> None:
         await asyncio.to_thread(_docker_resume_sync, pod_name)
     else:
         await _k8s_scale(service_name, replicas=1)
+
+
+async def image_present(container_image: str) -> bool:
+    """Is the image already local? Docker only — a k8s node pulls as part of
+    scheduling the pod, off the request path, so there's nothing to check
+    (and nothing to defer: _k8s_start never blocks on a pull)."""
+    if not settings.is_dev:
+        return True
+    return await asyncio.to_thread(_docker_image_present_sync, container_image)
+
+
+def _docker_image_present_sync(container_image: str) -> bool:
+    import docker
+    client = docker.from_env()
+    try:
+        client.images.get(container_image)
+        return True
+    except docker.errors.ImageNotFound:
+        return False
 
 
 async def is_running(pod_name: str) -> bool:
@@ -174,7 +199,7 @@ async def ensure_metadata_egress_block() -> None:
 
 async def _docker_start(
     *, pod_name, session_token, app_type, container_image, proxy_port, shm_size,
-    username, user_id, env_json, mount_home, needs_fuse=False, needs_userns=False,
+    username, user_id, env_json, mount_home, needs_fuse=False,
 ) -> str:
     return await asyncio.to_thread(
         _docker_start_sync,
@@ -189,13 +214,12 @@ async def _docker_start(
         env_json=env_json,
         mount_home=mount_home,
         needs_fuse=needs_fuse,
-        needs_userns=needs_userns,
     )
 
 
 def _docker_start_sync(
     *, pod_name, session_token, app_type, container_image, proxy_port, shm_size,
-    username, user_id, env_json, mount_home, needs_fuse=False, needs_userns=False,
+    username, user_id, env_json, mount_home, needs_fuse=False,
 ) -> str:
     import docker
     client = docker.from_env()
@@ -226,7 +250,7 @@ def _docker_start_sync(
         "PGID": "1000",
         "TZ": "UTC",
     }
-    if app_type == "kasm":
+    if app_type in SELKIES_APP_TYPES:
         # linuxserver/webtop: nginx strips /session/<token>/ prefix, so serve at /
         env.update({
             "CUSTOM_USER": username,
@@ -261,12 +285,27 @@ def _docker_start_sync(
     # Volumes
     volumes: dict = {}
     if mount_home:
-        vol_name = f"lwp-home-{user_id}"
+        if app_type in SELKIES_APP_TYPES:
+            # LinuxServer.io images keep all user state under /config
+            # (Chromium's profile, Kali's home dir, …) — they never touch
+            # /home/lwp. Keyed by image too, not just user: unlike our own
+            # kasm-base apps (one shared home across all of a user's VNC
+            # apps), unrelated LinuxServer.io images (Chromium vs Kali)
+            # shouldn't share a /config. Without an explicit bind here,
+            # Docker auto-creates a fresh anonymous volume for the image's
+            # declared VOLUME /config on every single launch — silently
+            # losing all data and leaking a volume every time.
+            slug = re.sub(r"[^a-zA-Z0-9_.-]", "-", container_image)
+            vol_name = f"lwp-config-{user_id}-{slug}"[:200]
+            bind_path = "/config"
+        else:
+            vol_name = f"lwp-home-{user_id}"
+            bind_path = "/home/lwp"
         try:
             client.volumes.get(vol_name)
         except docker.errors.NotFound:
             client.volumes.create(vol_name)
-        volumes[vol_name] = {"bind": "/home/lwp", "mode": "rw"}
+        volumes[vol_name] = {"bind": bind_path, "mode": "rw"}
 
     shm_bytes = _parse_size(shm_size)
 
@@ -274,31 +313,14 @@ def _docker_start_sync(
     devices = []
     cap_add = []
     security_opt = []
-    unmask_proc = False
     if needs_fuse:
         devices = ["/dev/fuse:/dev/fuse:rwm"]
         cap_add = ["SYS_ADMIN"]
         security_opt.append("apparmor:unconfined")
-    if needs_userns:
-        # Flatpak's bwrap sandbox creates its own user+pid+mount namespace and
-        # mounts a fresh /proc inside it. Unlike the FUSE case above this needs
-        # no extra capability (bwrap is root within its own namespace), but it
-        # does need syscalls Docker's default seccomp profile blocks (mount/
-        # unshare), and Docker's default-masked /proc paths unmasked —
-        # verified empirically: cap_add alone 403s on "pivot_root", seccomp+
-        # apparmor unconfined gets bwrap started but "flatpak run" still 403s
-        # mounting /proc until MaskedPaths/ReadonlyPaths are cleared too.
-        security_opt.append("seccomp=unconfined")
-        if "apparmor:unconfined" not in security_opt:
-            security_opt.append("apparmor:unconfined")
-        unmask_proc = True
 
-    # containers.run()'s security_opt has no way to unmask /proc — the CLI's
-    # `--security-opt systempaths=unconfined` isn't a real SecurityOpt value,
-    # it's a client-side shorthand the `docker` CLI expands into the
-    # HostConfig fields below before sending; passed straight through the SDK
-    # the daemon rejects the whole create-container call. So build the host
-    # config ourselves instead of going through containers.run().
+    # Built manually (create_host_config + create_container + api.start())
+    # rather than the higher-level containers.run() for full control over
+    # this combination of network/shm/devices/cap_add/security_opt/init.
     api = client.api
     host_config = api.create_host_config(
         network_mode=network,
@@ -311,14 +333,11 @@ def _docker_start_sync(
         # which never reaps orphaned children (e.g. ssh's `nc` ProxyCommand
         # child if ssh dies first) — they pile up as zombies for the life of
         # the container. --init attaches docker-init (tini) as a proper
-        # subreaper. Not for kasm-type apps though — LinuxServer.io images
-        # run s6-overlay, whose suexec hard-refuses to start ("can only run
-        # as pid 1") once tini takes PID 1 and execs it as PID 2 instead.
-        init=(app_type != "kasm"),
+        # subreaper. Not for Selkies-based apps though — they run s6-overlay,
+        # whose suexec hard-refuses to start ("can only run as pid 1") once
+        # tini takes PID 1 and execs it as PID 2 instead.
+        init=(app_type not in SELKIES_APP_TYPES),
     )
-    if unmask_proc:
-        host_config["MaskedPaths"] = []
-        host_config["ReadonlyPaths"] = []
 
     created = api.create_container(
         image=container_image,
@@ -446,14 +465,14 @@ def _docker_block_metadata_sync() -> None:
 async def _k8s_start(
     *, session_id, session_token, pod_name, service_name, app_type,
     container_image, proxy_port, cpu_limit, mem_limit, shm_size,
-    user_id, username, mount_home, env_json, needs_fuse=False, needs_userns=False,
+    user_id, username, mount_home, env_json, needs_fuse=False,
 ) -> str:
     from kubernetes_asyncio import client as k8s
     from kubernetes_asyncio import config as k8s_config
     await k8s_config.load_incluster_config()
 
     base = {"PUID": "1000", "PGID": "1000", "TZ": "UTC"}
-    if app_type == "kasm":
+    if app_type in SELKIES_APP_TYPES:
         base.update({
             "CUSTOM_USER": username,
             "PASSWORD":    session_id[:16],
@@ -492,7 +511,16 @@ async def _k8s_start(
     volume_mounts = [k8s.V1VolumeMount(name="shm", mount_path="/dev/shm")]
 
     if mount_home:
-        pvc_name = f"lwp-home-{user_id}"
+        if app_type in SELKIES_APP_TYPES:
+            # See the matching comment in _docker_start_sync — LinuxServer.io
+            # images store all user state under /config, keyed per (user,
+            # image) since unrelated images shouldn't share one /config.
+            slug = re.sub(r"[^a-z0-9-]", "-", container_image.lower()).strip("-")[:40]
+            pvc_name = f"lwp-config-{user_id[:8]}-{slug}"
+            home_mount_path = "/config"
+        else:
+            pvc_name = f"lwp-home-{user_id}"
+            home_mount_path = "/home/lwp"
         try:
             await core.read_namespaced_persistent_volume_claim(
                 name=pvc_name, namespace="lwp"
@@ -523,7 +551,7 @@ async def _k8s_start(
             ),
         ))
         volume_mounts.append(
-            k8s.V1VolumeMount(name="home", mount_path="/home/lwp")
+            k8s.V1VolumeMount(name="home", mount_path=home_mount_path)
         )
 
     container_spec = k8s.V1Container(
@@ -540,11 +568,10 @@ async def _k8s_start(
             requests={"cpu": "100m", "memory": "256Mi"},
         ),
         volume_mounts=volume_mounts,
-        # K8s security contexts don't expose Docker's per-flag seccomp/apparmor/
-        # systempaths knobs without a custom SCC/seccomp profile, so flatpak's
-        # bwrap sandbox (needs_userns) gets the same full-privileged grant as
-        # the FUSE mount case for now.
-        security_context=k8s.V1SecurityContext(privileged=True) if (needs_fuse or needs_userns) else None,
+        # K8s security contexts don't expose Docker's per-flag seccomp/apparmor
+        # knobs without a custom SCC/seccomp profile, so the FUSE mount case
+        # gets a full-privileged grant for now.
+        security_context=k8s.V1SecurityContext(privileged=True) if needs_fuse else None,
         # startup probe polls every 1s so the pod goes Ready the moment the port
         # opens (instead of waiting for readiness' 5s initial delay); 60s grace.
         startup_probe=k8s.V1Probe(

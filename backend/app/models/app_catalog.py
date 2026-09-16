@@ -1,6 +1,8 @@
 import uuid
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON, Boolean, CheckConstraint, ForeignKey, Integer, String, Text, UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,7 +18,9 @@ class App(Base, UUIDMixin, TimestampMixin):
     category: Mapped[str] = mapped_column(String(100), default="General", nullable=False)
     icon_url: Mapped[str] = mapped_column(String(500), default="", nullable=False)
 
-    # stream = Selkies-GStreamer WebRTC, web = plain HTTP, kasm = KasmVNC
+    # stream = our own lwp-kasm-base (legacy KasmVNC) or lwp-selkies-base
+    # image, web = always-on URL via the shared kiosk browser, kasm = a
+    # Selkies-based image (LinuxServer.io pull or our own selkies-base build)
     app_type: Mapped[str] = mapped_column(String(20), default="stream", nullable=False)
     # True = web-native app (serves its own browser UI, no VNC/desktop). Purely
     # a catalog classification for grouping/badging in the UI.
@@ -45,23 +49,43 @@ class App(Base, UUIDMixin, TimestampMixin):
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Set only for a user's own self-service web app (Profile → My web apps);
+    # null for everything admin-created. Distinct from AppPermission — an
+    # admin can grant a user *access* to a catalog app without that user
+    # being able to edit/delete it, which is gated on this field instead.
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
     permissions: Mapped[list["AppPermission"]] = relationship(
         back_populates="app", cascade="all, delete-orphan"
     )
     sessions: Mapped[list["Session"]] = relationship(back_populates="app")  # type: ignore[name-defined]
 
 
-class AppPermission(Base):
-    """Which groups can access an app. Empty = admin-only."""
+class AppPermission(Base, UUIDMixin):
+    """Restricts an app to specific groups and/or individual users. An app
+    with no rows here is open to everyone (see routers/apps.py list_apps) —
+    a row only ever narrows access, never an allow-only admin gate."""
     __tablename__ = "app_permissions"
-    __table_args__ = (UniqueConstraint("app_id", "group_id"),)
+    __table_args__ = (
+        UniqueConstraint("app_id", "group_id"),
+        UniqueConstraint("app_id", "user_id"),
+        CheckConstraint(
+            "(group_id IS NULL) != (user_id IS NULL)", name="ck_app_permission_one_target"
+        ),
+    )
 
     app_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("apps.id", ondelete="CASCADE"), primary_key=True
+        UUID(as_uuid=True), ForeignKey("apps.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    group_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), nullable=True
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
     )
 
     app: Mapped[App] = relationship(back_populates="permissions")
-    group: Mapped["Group"] = relationship(back_populates="app_permissions")  # type: ignore[name-defined]
+    group: Mapped["Group | None"] = relationship(back_populates="app_permissions")  # type: ignore[name-defined]
+    user: Mapped["User | None"] = relationship()  # type: ignore[name-defined]

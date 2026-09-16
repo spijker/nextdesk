@@ -1,4 +1,4 @@
-FROM lwp-kasm-base
+FROM lwp-selkies-base
 
 # VSCodium — open-source VS Code build, installed from the official .deb.
 # apt-get install of the local .deb pulls the Electron runtime deps.

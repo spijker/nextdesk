@@ -50,7 +50,10 @@ All endpoints except `/healthz` and `/api/auth/oidc/*` require an authenticated 
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/apps` | Apps visible to current user (filtered by group permissions) |
+| `GET` | `/api/apps` | Apps visible to current user (filtered by group *and* per-user permissions) |
+| `POST` | `/api/apps/personal` | Create a self-service web (kiosk) app owned by the current user — `{name, web_url, icon_url}` |
+| `PUT` | `/api/apps/personal/{app_id}` | Update a self-service app (must be `created_by` the current user) |
+| `DELETE` | `/api/apps/personal/{app_id}` | Delete a self-service app |
 
 ---
 
@@ -59,18 +62,19 @@ All endpoints except `/healthz` and `/api/auth/oidc/*` require an authenticated 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/sessions` | My active sessions (status: starting, running, suspended) |
-| `POST` | `/api/sessions` | Launch a session `{app_id}` |
+| `GET` | `/api/sessions/{id}` | Single session's current status — polled by the frontend while a container is still starting/being pulled |
+| `POST` | `/api/sessions` | Launch a session `{app_id}` — if the image isn't pulled locally yet, returns immediately and finishes starting it in the background |
 | `DELETE` | `/api/sessions` | Stop ALL my running sessions (logout flow) |
 | `DELETE` | `/api/sessions/{id}` | Stop a specific session |
 | `POST` | `/api/sessions/{id}/pause` | Suspend session (docker pause / k8s scale 0) |
 | `POST` | `/api/sessions/{id}/resume` | Resume suspended session |
 | `PATCH` | `/api/sessions/{id}/window` | Save window position `{x, y, width, height, minimized, maximized}` |
 | `POST` | `/api/sessions/{id}/heartbeat` | Keep-alive so the idle reaper doesn't stop an in-use session |
-| `GET` | `/api/sessions/{id}/audio` | Relays the desktop's Opus/Ogg audio stream (container `:8081`) to the browser |
-| `POST` | `/api/sessions/self-stop` | **Container-internal** — called by xstartup when app exits; auth via `X-Session-Token` header |
-| `POST` | `/api/sessions/open-file` | **Container-internal** — called by `lwp-xdg-open` when user opens a file; auth via `X-Session-Token` header; body `{path, mime}` |
+| `GET` | `/api/sessions/{id}/audio` | **Legacy KasmVNC apps only** — relays the desktop's Opus/Ogg audio stream (container `:8081`) to the browser. Selkies apps (`app_type=kasm`/`web`) handle audio natively client-side; the frontend controls volume/mute via `postMessage` into the session iframe instead, see [architecture.md](architecture.md#volume-control) |
+| `POST` | `/api/sessions/self-stop` | **Container-internal** — called when the app exits; auth via `X-Session-Token` header; also stops the container in the background (not just the DB row) |
+| `POST` | `/api/sessions/open-file` | **Container-internal** — called by the xdg-open bridge when user opens a file; auth via `X-Session-Token` header; body `{path, mime}` |
 | `GET` | `/api/sessions/open-file/poll` | **Frontend** — poll for pending open-file events; returns `{events: [{path, mime}]}` |
-| `GET` | `/api/sessions/validate` | **Nginx-internal** — auth_request endpoint; auth via `X-Session-Token` header |
+| `GET` | `/api/sessions/validate` | **Nginx-internal** — auth_request endpoint; auth via `X-Session-Token` header; returns `X-Session-Upstream`/`X-Session-Scheme`/`X-Session-Auth` (scheme+auth depend on `app_type`, see [architecture.md](architecture.md)) |
 | `GET` | `/api/sessions/{id}/launch` | Redirect page for opening a session in a new tab |
 | `POST` | `/api/sessions/{id}/vpn` | Per-window VPN routing toggle `{enabled}` — 409 if the session was launched without a running gateway |
 | `GET` | `/api/sessions/vpn/status` | Taskbar shield: `{running, connected}` for my VPN gateway session |
@@ -187,11 +191,16 @@ Per-user integrations (reuse the user's NC creds; best-effort — empty if the a
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/admin/apps` | All apps |
+| `GET` | `/api/admin/apps/linuxserver/lookup?q=` | Browse/search the full LinuxServer.io image catalog (200+ images, proxied + cached server-side) for "Add from catalog" |
 | `POST` | `/api/admin/apps` | Create app |
 | `PUT` | `/api/admin/apps/{id}` | Update app |
 | `DELETE` | `/api/admin/apps/{id}` | Soft-delete app |
-| `POST` | `/api/admin/apps/{id}/pull` | Queue image pull (ARQ job) |
-| `POST` | `/api/admin/apps/{id}/permissions` | Set group permissions `{group_ids: […]}` |
+| `GET` | `/api/admin/apps/staleness` | Last image-update check result (hourly cron) |
+| `POST` | `/api/admin/apps/staleness/check` | Run the image-update check now |
+| `POST` | `/api/admin/apps/{id}/pull` | Predownload the app's image in the background (dev/Docker only — k8s nodes pull on schedule) |
+| `GET` | `/api/admin/apps/{id}/pull` | Predownload status: `pending`/`pulling`/`done`/`error` |
+| `GET` | `/api/admin/apps/{id}/permissions` | Get `{group_ids: […], user_ids: […]}` |
+| `PUT` | `/api/admin/apps/{id}/permissions` | Replace permissions `{group_ids: […], user_ids: […]}` — both empty = open to everyone |
 
 ## Admin — Sessions
 
@@ -207,6 +216,7 @@ Per-user integrations (reuse the user's NC creds; best-effort — empty if the a
 | `GET` | `/api/admin/stats` | Overview: active sessions, online users, totals |
 | `GET` | `/api/admin/stats/traffic` | Live traffic: active sessions, users online, active-by-app, 24h logins/failures/sessions |
 | `GET` | `/api/admin/stats/analytics` | Per-app and per-user usage (session counts, avg duration, total hours) |
+| `GET` | `/api/admin/stats/host` | Host disk/CPU/memory + Docker container counts (dev/Docker only — reads `/proc` + `docker.api.df()`) |
 | `POST` | `/api/admin/settings/siem/test` | Send a test event to the configured SIEM/syslog target |
 | `GET` | `/api/admin/audit` | Audit log (`?action=`, `?user_id=`, `?limit=`, `?offset=`) |
 | `GET` | `/api/admin/settings` | Key/value settings |

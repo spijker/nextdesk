@@ -1,9 +1,11 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_session
 from app.dependencies import require_admin
 from app.models.app_catalog import App
@@ -12,6 +14,52 @@ from app.models.session import Session
 from app.models.user import User
 
 router = APIRouter(prefix="/api/admin/stats", tags=["admin"])
+
+
+@router.get("/host")
+async def host_stats(_: User = Depends(require_admin)):
+    """Docker host snapshot for the admin dashboard: disk (same host path the
+    predownload feature checks before pulling an image), CPU load, memory,
+    and how many containers are up. Dev/Docker only — a k8s cluster doesn't
+    have one "host" to report on."""
+    if not settings.is_dev:
+        return {"available": False}
+    return await asyncio.to_thread(_host_stats_sync)
+
+
+def _host_stats_sync() -> dict:
+    import os
+    import shutil
+
+    import docker
+
+    with open("/proc/loadavg") as f:
+        load1, load5, load15 = (float(x) for x in f.read().split()[:3])
+
+    mem: dict[str, int] = {}
+    with open("/proc/meminfo") as f:
+        for line in f:
+            key, _, rest = line.partition(":")
+            mem[key] = int(rest.strip().split()[0]) * 1024  # kB -> bytes
+    mem_total = mem.get("MemTotal", 0)
+    mem_available = mem.get("MemAvailable", 0)
+
+    client = docker.from_env()
+    root = client.info().get("DockerRootDir", "/var/lib/docker")
+    total, used, free = shutil.disk_usage(root)
+    df = client.api.df()
+    images_bytes = sum(i.get("Size", 0) for i in (df.get("Images") or []))
+
+    return {
+        "available": True,
+        "cpu": {"cores": os.cpu_count() or 1, "load1": load1, "load5": load5, "load15": load15},
+        "mem": {"total_bytes": mem_total, "available_bytes": mem_available, "used_bytes": mem_total - mem_available},
+        "disk": {"total_bytes": total, "used_bytes": used, "free_bytes": free, "images_bytes": images_bytes},
+        "containers": {
+            "running": len(client.containers.list()),
+            "total": len(client.containers.list(all=True)),
+        },
+    }
 
 
 @router.get("/traffic")

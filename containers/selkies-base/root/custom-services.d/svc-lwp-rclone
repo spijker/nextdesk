@@ -1,0 +1,3 @@
+#!/usr/bin/with-contenv bash
+# Mounts Nextcloud when LWP_NC_URL is set; sleeps indefinitely otherwise.
+exec s6-setuidgid abc /usr/local/bin/lwp-nc-mount.sh

@@ -6,7 +6,7 @@
 
 > **Proof of Concept.** This is a working POC, not a hardened production release — code and APIs may change without notice, and it hasn't had a full security audit. Everything below is implemented and runnable, but treat it as a demo/evaluation build.
 >
-> Built with a local LLM (Qwen3, via OpenWebUI) and Claude. Thanks to every open-source app bundled or integrated here — Nextcloud, KasmVNC, and all the rest — for the great software.
+> Built with a local LLM (Qwen3, via OpenWebUI) and Claude. Thanks to every open-source app bundled or integrated here — Nextcloud, Selkies, LinuxServer.io, KasmVNC, and all the rest — for the great software.
 
 A browser-based remote desktop — a Kasm alternative built on a custom VNC stack with a full windowed desktop experience, deeply integrated with Nextcloud. Log in once and get a full Linux desktop (or individual apps) running in isolated containers, streamed to the browser, with your Nextcloud storage mounted everywhere.
 
@@ -38,7 +38,7 @@ Install the bundled Nextcloud custom app (`nextcloud-app/nextdesk/`), point it a
 | **Database** | PostgreSQL 16 |
 | **Cache / queue** | Redis 7 |
 | **Proxy** | Nginx — `auth_request` session routing, strips `/session/<token>/` prefix |
-| **Desktop apps** | VNC over WebSocket — KasmVNC HTML5 client. Base `lwp-kasm-base` — Ubuntu 24.04 + KasmVNC (8080) + PulseAudio + ffmpeg Opus audio (8081) + supervisord |
+| **Desktop apps** | Selkies (WebSocket mode, H.264/pixelflux) — no TURN server needed. Base `lwp-selkies-base` — `ghcr.io/linuxserver/baseimage-selkies` (s6-overlay, Wayland/labwc) + LWP sidecars as custom-services.d. `lwp-kasm-base` (legacy KasmVNC on :8080) is being phased out — only the VPN gateway app still builds on it. LinuxServer.io's own 200+ image catalog is also pickable straight from the admin UI (same Selkies base, no build step) |
 | **Web-native apps** | App serves its own UI over HTTPS, proxied directly (no VNC). Base `lwp-web-base` — nginx TLS wrapper; or the app does its own TLS (code-server, ttyd) |
 | **Auth** | OIDC (SSO), local username/password, LDAP/Active Directory; single-session takeover |
 | **Storage** | rclone WebDAV (Nextcloud) with VFS full-cache mode + user SFTP/S3 mounts (key or password) |
@@ -88,13 +88,18 @@ First user to log in automatically becomes admin.
 - **Session limits** — per-user cap, per-group quotas, idle auto-reap + max lifetime
 
 ### Apps (catalog)
-- **Desktop apps (VNC)** — Firefox, Vivaldi, Thunderbird, LibreOffice, Terminator (+ opencode TUI, node/nvm), SSHPilot, VSCodium, OpenCode (desktop app), Headlamp, FileZilla, Remmina, Ferdium
-- **Web-native apps (no VNC — lighter, crisper)** — Terminal (ttyd + ssh/kubectl/k9s/bao, node/nvm, ruff/yamllint/jsonlint), JupyterLab, pgweb, htop, VPN
+- **Desktop apps (Selkies)** — Firefox, Vivaldi, Thunderbird, LibreOffice, Terminator (+ opencode TUI, node/nvm), SSHPilot, VSCodium, OpenCode (desktop app), Headlamp, FileZilla, Remmina, Ferdium
+- **LinuxServer.io catalog** — pick any of their 200+ maintained images (Chromium, Kali Linux, Webtop, …) straight from the admin UI, no build step; same Selkies base/proxy path as the apps above
+- **Web-native apps (no desktop stream — lighter, crisper)** — Terminal (ttyd + ssh/kubectl/k9s/bao, node/nvm, ruff/yamllint/jsonlint), JupyterLab, pgweb, htop, VPN
+- **Kiosk (URL) apps** — a shared full-screen browser for always-on internal tools/dashboards (e.g. an internal Rancher/Grafana); admins add these to the catalog, or a user can add their own private one from Profile (see **My web apps** below)
 - The start menu **badges** apps *Web* vs *Desktop* and groups them; admins toggle `web_native` per app
-- **Add your own** — VNC app = `FROM lwp-kasm-base` + install; web app = `FROM lwp-web-base` (TLS wrapper, handles the session prefix) or serve your own TLS. See [docs/apps.md](docs/apps.md)
+- **Restrict to specific groups or people** — an app with no restrictions is open to everyone; admins can scope one to certain groups and/or individual users
+- **Predownload** — admins can warm an image ahead of a user's first launch (disk-space-aware) instead of pulling it on demand
+- **Add your own** — Selkies app = `FROM lwp-selkies-base` + install; web app = `FROM lwp-web-base` (TLS wrapper, handles the session prefix) or serve your own TLS. See [docs/apps.md](docs/apps.md)
 
 ### Audio
-- **Independent Opus/Ogg stream** (KasmVNC 1.4's client can't play audio standalone): a PulseAudio null sink → `ffmpeg` serves the sink monitor on the container's `:8081`; the backend relays it (`GET /api/sessions/{id}/audio`) to a hidden `<audio>` element.
+- **Selkies apps** — native synced audio (pcmflux → Web Audio API), no separate stream needed. The window's mute/volume slider drives it live via `postMessage({type: "setVolume"|"setMute", ...})` straight into the session, no relaunch.
+- **Legacy KasmVNC apps** (just the VPN gateway now) — an independent Opus/Ogg stream, since KasmVNC's own client can't play audio standalone: a PulseAudio null sink → `ffmpeg` serves the sink monitor on the container's `:8081`; the backend relays it (`GET /api/sessions/{id}/audio`) to a hidden `<audio>` element.
 - Per-window **mute** (default) + a titlebar **volume slider** (reveals on hover). No browser plugins; works in Chrome and Firefox.
 
 ### Storage & Nextcloud
@@ -141,12 +146,15 @@ First user to log in automatically becomes admin.
 - Change password (local), edit display name, **sign out other browsers**
 - Session quota (used / limit + group ceilings) and **Nextcloud storage** usage
 - **Extra storage mounts** (SFTP with key or password, S3) and **App VPN defaults** (start direct / through VPN / never proxied, per app)
+- **My web apps** — add your own private full-screen-browser shortcut to any URL (dashboard, internal tool, …); only you can see or launch it
+- **Selkies menu** — off by default (it'd otherwise show as a second title bar next to LWP's own window chrome); flip it on per app to get Selkies' native sidebar (video/audio/stats/sharing settings) too
 - Your recent activity (audit trail) and preferences (logout behaviour, reduce-motion, background Terminal, clipboard sync)
 
 ### Admin
 - **Users** — create/edit, disable, **delete**, **force-logout**, **stop their desktops**, **sign everyone out**, **bulk actions** on multi-selected users
 - **Groups** — membership + **per-group quotas** (concurrent sessions + CPU/mem ceilings) + **Simple mode** layout policy
-- **Apps** — catalog CRUD, per-group permissions, `web_native` toggle
+- **Apps** — catalog CRUD, restrict to groups and/or individual people, `web_native` toggle, image predownload, staleness check
+- **Host stats** — disk (free/used, image store size), CPU load, memory, running/total container count
 - **Sessions** — monitor all, stop / bulk-kill, **CSV export**
 - **Traffic** — live dashboard: active sessions, users online, 24h logins/failures, active-by-app, live session table (polls 10s)
 - **System** — **announcement banner** + **maintenance mode** (block new launches)
@@ -196,12 +204,16 @@ lwp/
 │       ├── store/          desktop.ts (Zustand), auth.ts
 │       └── hooks/          useIdleTimer.ts
 ├── containers/
-│   ├── kasm-base/          VNC base (Ubuntu 24.04 + KasmVNC + PulseAudio + rclone)
+│   ├── selkies-base/       Desktop app base — ghcr.io/linuxserver/baseimage-selkies
+│   │                       + LWP sidecars (NC/SFTP/S3 mounts, VPN relay, "open with…",
+│   │                       file-list API) as s6 custom-services.d
+│   ├── kasm-base/          Legacy VNC base (KasmVNC + PulseAudio + rclone) — only vpn/ builds on it now
 │   ├── web-base/           Web-native base (nginx TLS wrapper, prefix-aware)
+│   ├── kiosk/              Shared full-screen browser for app_type=web (admin catalog + Profile "My web apps")
 │   ├── vivaldi|firefox|thunderbird|libreoffice|terminator|
-│   │   sshpilot|vscodium|headlamp|filezilla|remmina|ferdium/   VNC apps (FROM kasm-base)
+│   │   sshpilot|vscodium|headlamp|filezilla|remmina|ferdium/   Desktop apps (FROM selkies-base)
 │   ├── terminal/           ttyd web terminal (own TLS) + ssh/k8s/bao CLI tooling
-│   ├── vpn/                per-user VPN gateway (OpenConnect + ocproxy SOCKS5)
+│   ├── vpn/                per-user VPN gateway (OpenConnect + ocproxy SOCKS5, FROM kasm-base)
 │   ├── htop/               web-native TUI (FROM lwp-terminal)
 │   └── jupyterlab|pgweb/   web-native (FROM web-base)
 ├── compose/                Docker Compose dev stack + .env.example

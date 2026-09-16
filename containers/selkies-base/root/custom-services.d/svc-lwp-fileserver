@@ -1,0 +1,3 @@
+#!/usr/bin/with-contenv bash
+# Local filesystem HTTP API on :19090 for the backend (mounted drives, files).
+exec s6-setuidgid abc /usr/local/bin/lwp-fileserver.py

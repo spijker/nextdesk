@@ -1,0 +1,9 @@
+{
+  "policies": {
+    "OverrideFirstRunPage": "",
+    "OverridePostUpdatePage": "",
+    "DisableFirefoxStudies": true,
+    "DontCheckDefaultBrowser": true,
+    "SkipTermsOfUse": true
+  }
+}

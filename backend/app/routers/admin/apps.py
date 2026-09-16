@@ -1,3 +1,4 @@
+import asyncio
 import time
 import uuid
 
@@ -6,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_session
 from app.dependencies import require_role
 from app.models.app_catalog import App, AppPermission
@@ -41,14 +43,14 @@ async def _linuxserver_catalog() -> list[dict]:
     return images
 
 
-# Categories that actually render a usable GUI over KasmVNC — most of the
-# ~200 LinuxServer.io images are headless server apps (torrent clients, the
-# *arr stack, etc.) that would just show an empty desktop. Only applied when
-# browsing with no search term; an explicit search still matches the whole
-# catalog since the admin might know better.
+# Categories that render a usable desktop GUI — sorted first in browse/search
+# results, since most of the catalog is headless server apps (torrent
+# clients, the *arr stack, …) that would just show an empty desktop. Doesn't
+# hide anything, just orders the likely-relevant ones above the rest.
 GUI_CATEGORIES = (
     "web browser", "remote desktop", "documents", "email",
     "multimedia", "productivity", "creative", "graphics",
+    "games", "chat", "3d modeling", "3d printing", "photos", "music",
 )
 
 
@@ -59,9 +61,16 @@ async def linuxserver_lookup(
 ):
     """Search — or with no query, browse — the public LinuxServer.io image
     catalog (their published fleet API) so an admin can add a maintained
-    lscr.io/linuxserver/<name> image (app_type=kasm, KasmVNC on port 3000)
+    lscr.io/linuxserver/<name> image (app_type=kasm, Selkies on port 3000)
     without hand-typing the registry path and tag. Proxied server-side,
-    cached in-process."""
+    cached in-process.
+
+    Used to hard-filter empty-query browsing down to GUI_CATEGORIES and cap
+    results at 40 — the category list was stale (missed Games, Chat, 3D
+    Modeling/Printing, Photos, Music, …: 174 of the catalog's 201 images
+    never showed up at all) and it's a small enough list that hiding most of
+    it isn't buying anything. Now just a sort boost, and every match returns.
+    """
     images = await _linuxserver_catalog()
     needle = q.strip().lower()
     if needle:
@@ -71,11 +80,12 @@ async def linuxserver_lookup(
             or needle in (img.get("category") or "").lower()
         ]
     else:
-        matches = [
-            img for img in images
-            if any(c in (img.get("category") or "").lower() for c in GUI_CATEGORIES)
-        ]
-    matches.sort(key=lambda img: (-(img.get("monthly_pulls") or 0), img.get("name") or ""))
+        matches = list(images)
+    matches.sort(key=lambda img: (
+        not any(c in (img.get("category") or "").lower() for c in GUI_CATEGORIES),
+        -(img.get("monthly_pulls") or 0),
+        img.get("name") or "",
+    ))
     return [
         {
             "name": img.get("name"),
@@ -84,7 +94,7 @@ async def linuxserver_lookup(
             "icon_url": img.get("project_logo") or "",
             "tags": [t.get("tag") for t in img.get("tags", []) if t.get("tag")] or ["latest"],
         }
-        for img in matches[:40]
+        for img in matches
     ]
 
 
@@ -204,7 +214,11 @@ async def get_permissions(
     result = await db.execute(
         select(AppPermission).where(AppPermission.app_id == app_id)
     )
-    return [{"group_id": str(p.group_id)} for p in result.scalars().all()]
+    perms = result.scalars().all()
+    return {
+        "group_ids": [str(p.group_id) for p in perms if p.group_id],
+        "user_ids": [str(p.user_id) for p in perms if p.user_id],
+    }
 
 
 @router.put("/{app_id}/permissions")
@@ -214,8 +228,10 @@ async def set_permissions(
     _: User = Depends(require_role(["admin"])),
     db: AsyncSession = Depends(get_session),
 ):
-    """Replace permissions. body = {"group_ids": ["uuid", ...]}"""
+    """Replace permissions. body = {"group_ids": [...], "user_ids": [...]}.
+    Both empty = open to everyone (see routers/apps.py list_apps)."""
     group_ids = [uuid.UUID(g) for g in body.get("group_ids", [])]
+    user_ids = [uuid.UUID(u) for u in body.get("user_ids", [])]
 
     existing = await db.execute(select(AppPermission).where(AppPermission.app_id == app_id))
     for p in existing.scalars().all():
@@ -223,9 +239,79 @@ async def set_permissions(
 
     for gid in group_ids:
         db.add(AppPermission(app_id=app_id, group_id=gid))
+    for uid in user_ids:
+        db.add(AppPermission(app_id=app_id, user_id=uid))
 
     await db.commit()
     return {"ok": True}
+
+
+# ── Predownload / local storage ──────────────────────────────────────────────
+# Pulling a multi-GB image (a full LinuxServer.io desktop, say) can take
+# minutes — sessions.py now defers that to a background task on first launch
+# so it doesn't blow nginx's request timeout, but an admin would rather warm
+# the image ahead of time so a user's *first* launch is instant too. Same
+# in-memory progress pattern as admin/builds.py (single-process; swap for
+# Redis in multi-replica prod).
+_pull_progress: dict[str, dict] = {}
+
+
+def _sync_pull(app_id: str, image: str) -> None:
+    import docker
+    client = docker.from_env()
+    _pull_progress[app_id] = {"status": "pulling", "detail": ""}
+    try:
+        last = ""
+        for chunk in client.api.pull(image, stream=True, decode=True):
+            if chunk.get("status"):
+                last = chunk["status"]
+                if chunk.get("progress"):
+                    last += f" {chunk['progress']}"
+                _pull_progress[app_id]["detail"] = last
+        _pull_progress[app_id]["status"] = "done"
+    except Exception as exc:
+        _pull_progress[app_id] = {"status": "error", "detail": str(exc)[:300]}
+
+
+async def _pull_task(app_id: str, image: str) -> None:
+    await asyncio.to_thread(_sync_pull, app_id, image)
+    if _pull_progress.get(app_id, {}).get("status") == "done":
+        # Otherwise the catalog table keeps showing "image missing" — pulling
+        # only refreshes the local Docker image cache, not the images.staleness
+        # setting the table reads from (which only updates on the hourly cron
+        # or a manual "Check for image updates" click).
+        from app.tasks.worker import check_image_updates
+        await check_image_updates({})
+
+
+@router.post("/{app_id}/pull")
+async def predownload_image(
+    app_id: uuid.UUID,
+    _: User = Depends(require_role(["admin"])),
+    db: AsyncSession = Depends(get_session),
+):
+    """Kick off a background pull of the app's image so a user's first
+    launch doesn't have to wait for it (dev/Docker only — k8s nodes pull
+    on schedule)."""
+    if not settings.is_dev:
+        raise HTTPException(status_code=400, detail="Predownload only applies to Docker dev/compose")
+    app = await db.get(App, app_id)
+    if not app or not app.container_image:
+        raise HTTPException(status_code=404, detail="App has no container image")
+    aid = str(app_id)
+    if _pull_progress.get(aid, {}).get("status") == "pulling":
+        return {"queued": True}
+    asyncio.create_task(_pull_task(aid, app.container_image))
+    return {"queued": True}
+
+
+@router.get("/{app_id}/pull")
+async def predownload_status(
+    app_id: uuid.UUID,
+    _: User = Depends(require_role(["admin"])),
+):
+    """pending (never pulled) | pulling | done | error"""
+    return _pull_progress.get(str(app_id), {"status": "pending", "detail": ""})
 
 
 def _app_out(a: App) -> dict:

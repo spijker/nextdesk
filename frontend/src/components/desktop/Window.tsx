@@ -75,7 +75,9 @@ export function Window({ win }: Props) {
   const [resizing,  setResizing]  = useState(false);
   const [snapZone,  setSnapZone]  = useState<SnapZone>(null);
 
-  // Apply mute to iframe media whenever win.muted changes
+  // Apply mute to iframe media whenever win.muted changes — web-native apps
+  // (Jupyter, etc.) with their own embedded <audio>/<video>, unrelated to
+  // Selkies below (its audio never touches a real media element).
   useEffect(() => {
     try {
       const doc = iframeRef.current?.contentDocument;
@@ -89,7 +91,23 @@ export function Window({ win }: Props) {
   // Startup poll + liveness/reconnect (paused while suspended — container is
   // intentionally down then, so don't flag it as a lost connection).
   const { ready, lost, failed, frameKey, reconnect } =
-    useSessionHealth(win.connectUrl, { enabled: !win.suspended });
+    useSessionHealth(win.connectUrl, win.sessionId, { enabled: !win.suspended });
+
+  // Selkies plays audio via its own AudioWorklet+GainNode, not a real
+  // <audio> element — nothing for the effect above to find. It does listen
+  // for exactly this postMessage pair on window (same-origin, since we
+  // proxy it under our own domain), confirmed straight from its bundled
+  // client JS (undocumented, but functionally live — no relaunch needed,
+  // unlike anything gated behind SELKIES_* env vars at container start).
+  // frameKey in the deps: a remounted iframe is a fresh client with its own
+  // default volume, needing the current slider position re-applied.
+  useEffect(() => {
+    if (win.appType !== "kasm" || !ready) return;
+    const target = iframeRef.current?.contentWindow;
+    if (!target) return;
+    target.postMessage({ type: "setVolume", value: win.volume }, window.location.origin);
+    target.postMessage({ type: "setMute", value: win.muted }, window.location.origin);
+  }, [win.appType, win.muted, win.volume, frameKey, ready]);
 
   // Resolution/zoom (Profile → Display): changing it re-navigates the
   // already-open iframe (same DOM node, new `resize=` query) — no relaunch.
@@ -106,7 +124,15 @@ export function Window({ win }: Props) {
       .catch(() => {})
       .finally(() => { resuming.current = false; });
     resumeWindow(win.windowId);
-  }, [win.sessionId, win.windowId, resumeWindow]);
+    // The health hook only re-polls readiness on startup or an explicit
+    // reconnect() — without this, `ready` stays true from before the
+    // container was paused, so the suspended overlay would clear straight
+    // onto a stale, still-frozen iframe with no feedback while the
+    // websocket underneath reconnects. reconnect() also remounts the
+    // iframe (frameKey bump), which the paused container's dead connection
+    // needs anyway — resuming rarely just picks the old socket back up.
+    reconnect();
+  }, [win.sessionId, win.windowId, resumeWindow, reconnect]);
 
   // Feed activity from inside the session iframe (same-origin) so an actively
   // used session isn't wrongly suspended by the idle timer.
@@ -234,19 +260,25 @@ export function Window({ win }: Props) {
     stopSession.mutate();
   };
 
-  // ── Desktop audio ──────────────────────────────────────────────────────────
-  // Plays the container's Opus/Ogg stream (relayed by the backend) in a hidden
-  // <audio>. No-op for web-native apps (their container has no audio streamer).
+  // ── Desktop audio (kasm-base / lwp-kasm-base "stream" apps only) ───────────
+  // Plays the container's Opus/Ogg stream (relayed by the backend) in a
+  // hidden <audio> — the lwp-audio sidecar that exists specifically because
+  // classic KasmVNC's own in-client audio isn't usable embedded like this.
+  // Selkies apps (app_type=kasm) don't run that sidecar at all — nothing on
+  // :8081 — and use the postMessage volume control above instead; without
+  // this guard they'd just retry a connection that can never succeed, forever.
   const audioRef = useRef<HTMLAudioElement>(null);
   const [audioKey, setAudioKey] = useState(0);
+  const wantsLegacyAudio = win.appType !== "kasm";
   useEffect(() => {
+    if (!wantsLegacyAudio) return;
     if (audioRef.current) {
       audioRef.current.muted = win.muted;
       audioRef.current.volume = win.volume;
     }
     audioRef.current?.play().catch(() => {});
-  }, [win.muted, win.volume, audioKey]);
-  const audioEl = (
+  }, [wantsLegacyAudio, win.muted, win.volume, audioKey]);
+  const audioEl = wantsLegacyAudio && (
     <audio
       key={audioKey}
       ref={audioRef}
@@ -390,7 +422,7 @@ export function Window({ win }: Props) {
                 <div className="text-center text-white">
                   <Wifi className="mx-auto mb-3 h-8 w-8 text-red-400" />
                   <div className="text-xs font-semibold">{win.appName} didn't start</div>
-                  <div className="mt-1 text-[11px] text-white/40">No response from the container within 60 seconds</div>
+                  <div className="mt-1 text-[11px] text-white/40">Timed out waiting for the app to start</div>
                   <div className="mt-4 flex items-center justify-center gap-2">
                     <button
                       onClick={reconnect}
