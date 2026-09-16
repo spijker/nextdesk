@@ -4,7 +4,7 @@ import { Minus, Maximize2, Minimize2, X, Clipboard, Volume2, VolumeX, RefreshCw,
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import client from "@/api/client";
-import type { App, Session } from "@/types";
+import { SELKIES_APP_TYPES, type App, type Session } from "@/types";
 import { useAuthStore } from "@/store/auth";
 import { useDesktopStore, type AppWindow } from "@/store/desktop";
 import { useSessionHealth } from "@/hooks/useSessionHealth";
@@ -102,7 +102,7 @@ export function Window({ win }: Props) {
   // frameKey in the deps: a remounted iframe is a fresh client with its own
   // default volume, needing the current slider position re-applied.
   useEffect(() => {
-    if (win.appType !== "kasm" || !ready) return;
+    if (!SELKIES_APP_TYPES.includes(win.appType) || !ready) return;
     const target = iframeRef.current?.contentWindow;
     if (!target) return;
     target.postMessage({ type: "setVolume", value: win.volume }, window.location.origin);
@@ -260,16 +260,17 @@ export function Window({ win }: Props) {
     stopSession.mutate();
   };
 
-  // ── Desktop audio (kasm-base / lwp-kasm-base "stream" apps only) ───────────
+  // ── Desktop audio (legacy kasm-base "stream" apps only) ────────────────────
   // Plays the container's Opus/Ogg stream (relayed by the backend) in a
   // hidden <audio> — the lwp-audio sidecar that exists specifically because
   // classic KasmVNC's own in-client audio isn't usable embedded like this.
-  // Selkies apps (app_type=kasm) don't run that sidecar at all — nothing on
-  // :8081 — and use the postMessage volume control above instead; without
-  // this guard they'd just retry a connection that can never succeed, forever.
+  // Selkies apps (app_type kasm OR web — see SELKIES_APP_TYPES) don't run
+  // that sidecar at all — nothing on :8081 — and use the postMessage volume
+  // control above instead; without this guard they'd hammer the backend
+  // retrying a connection that can never succeed, forever.
   const audioRef = useRef<HTMLAudioElement>(null);
   const [audioKey, setAudioKey] = useState(0);
-  const wantsLegacyAudio = win.appType !== "kasm";
+  const wantsLegacyAudio = !SELKIES_APP_TYPES.includes(win.appType);
   useEffect(() => {
     if (!wantsLegacyAudio) return;
     if (audioRef.current) {

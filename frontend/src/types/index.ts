@@ -21,6 +21,14 @@ export interface User {
 
 export type AppType = "stream" | "web" | "kasm";
 
+// app_type values whose container is Selkies-based (custom lwp-selkies-base
+// builds, pulled lscr.io/linuxserver/* images, and the shared kiosk/web-app
+// launcher) — mirrors SELKIES_APP_TYPES in backend/app/services/container.py.
+// These have no lwp-audio sidecar (Selkies plays audio natively) and no
+// legacy KasmVNC clipboard quirks; everything else ("stream") is the
+// old kasm-base/ttyd path.
+export const SELKIES_APP_TYPES: AppType[] = ["kasm", "web"];
+
 export interface App {
   id: string;
   name: string;
