@@ -296,15 +296,26 @@ def _docker_start_sync(
             # declared VOLUME /config on every single launch — silently
             # losing all data and leaking a volume every time.
             slug = re.sub(r"[^a-zA-Z0-9_.-]", "-", container_image)
+            subdir = f"users/{user_id}/{slug}"
             vol_name = f"lwp-config-{user_id}-{slug}"[:200]
             bind_path = "/config"
         else:
+            subdir = f"users/{user_id}/home"
             vol_name = f"lwp-home-{user_id}"
             bind_path = "/home/lwp"
-        try:
-            client.volumes.get(vol_name)
-        except docker.errors.NotFound:
-            client.volumes.create(vol_name)
+        if settings.juicefs_enabled:
+            # Distinct name prefix from the plain-local-driver volume above —
+            # Docker refuses to create a volume with the same name but a
+            # different driver than one that already exists, so reusing
+            # vol_name here would break for anyone who launched before this
+            # was turned on. Keeps the flag non-destructive to flip either way.
+            vol_name = f"lwp-jfs-{vol_name}"[:200]
+            _ensure_juicefs_volume(client, vol_name, subdir)
+        else:
+            try:
+                client.volumes.get(vol_name)
+            except docker.errors.NotFound:
+                client.volumes.create(vol_name)
         volumes[vol_name] = {"bind": bind_path, "mode": "rw"}
 
     shm_bytes = _parse_size(shm_size)
@@ -370,6 +381,31 @@ def _docker_start_sync(
                     pass  # already connected
     log.info("Started Docker container %s (image=%s)", pod_name, container_image)
     return pod_name  # Docker network resolves container by name
+
+
+def _ensure_juicefs_volume(client, vol_name: str, subdir: str) -> None:
+    """Idempotently create a Docker volume backed by one subdirectory of the
+    existing shared JuiceFS filesystem, via the juicedata/juicefs Docker
+    volume plugin. One filesystem, one subdir per (user, app) — not one
+    JuiceFS filesystem per user. The plugin itself must already be
+    installed on the host (`docker plugin install juicedata/juicefs
+    --alias <juicefs_volume_driver> --grant-all-permissions`) — an
+    operator step outside this app, see docs/storage-juicefs.md."""
+    import docker
+    try:
+        client.volumes.get(vol_name)
+        return
+    except docker.errors.NotFound:
+        pass
+    client.volumes.create(
+        vol_name,
+        driver=settings.juicefs_volume_driver,
+        driver_opts={
+            "name": settings.juicefs_name,
+            "metaurl": settings.juicefs_meta_url,
+            "subdir": subdir,
+        },
+    )
 
 
 def _live_vpn_network(client, user_id: str):
