@@ -284,6 +284,7 @@ def _docker_start_sync(
 
     # Volumes
     volumes: dict = {}
+    tmpfs: dict = {}
     if mount_home:
         if app_type in SELKIES_APP_TYPES:
             # LinuxServer.io images keep all user state under /config
@@ -311,12 +312,27 @@ def _docker_start_sync(
             # was turned on. Keeps the flag non-destructive to flip either way.
             vol_name = f"lwp-jfs-{vol_name}"[:200]
             _ensure_juicefs_volume(client, vol_name, subdir)
+            # JuiceFS reserves .accesslog/.config/.stats as read-only special
+            # files at the root of ANY subdir mount (confirmed: mkdir over
+            # them fails EEXIST, and they can't be rm'd either) — collides
+            # with real apps needing a writable ~/.config (Firefox and
+            # basically every GTK/XDG app). So the volume goes one level to
+            # the side instead of straight at bind_path, HOME points at a
+            # real subdirectory inside it (nothing reserved below the mount
+            # root), and bind_path gets an empty tmpfs stub just to stop
+            # Docker auto-creating (and leaking) an anonymous volume for the
+            # image's declared VOLUME bind_path — nothing else uses it.
+            jfs_mount = "/mnt/lwp-jfs"
+            _ensure_juicefs_home_dir(client, vol_name)
+            volumes[vol_name] = {"bind": jfs_mount, "mode": "rw"}
+            tmpfs[bind_path] = ""
+            env["HOME"] = f"{jfs_mount}/data"
         else:
             try:
                 client.volumes.get(vol_name)
             except docker.errors.NotFound:
                 client.volumes.create(vol_name)
-        volumes[vol_name] = {"bind": bind_path, "mode": "rw"}
+            volumes[vol_name] = {"bind": bind_path, "mode": "rw"}
 
     shm_bytes = _parse_size(shm_size)
 
@@ -336,6 +352,7 @@ def _docker_start_sync(
     host_config = api.create_host_config(
         network_mode=network,
         binds=volumes or None,
+        tmpfs=tmpfs or None,
         shm_size=shm_bytes,
         devices=devices or None,
         cap_add=cap_add or None,
@@ -405,6 +422,30 @@ def _ensure_juicefs_volume(client, vol_name: str, subdir: str) -> None:
             "metaurl": settings.juicefs_meta_url,
             "subdir": subdir,
         },
+    )
+
+
+_JFS_HOME_HELPER_IMAGE = "alpine:3.20"
+
+
+def _ensure_juicefs_home_dir(client, vol_name: str) -> None:
+    """Pre-create the real 'data' subdirectory HOME gets pointed at (see
+    _docker_start_sync) inside a freshly-created JuiceFS volume, owned by
+    the PUID/PGID (1000:1000) every session container runs its app as —
+    some apps assume $HOME already exists (rather than mkdir -p'ing it
+    themselves), and it has to be writable by that uid, not root (this
+    helper itself runs as root). One-off throwaway container; cheap and
+    idempotent."""
+    import docker
+    try:
+        client.images.get(_JFS_HOME_HELPER_IMAGE)
+    except docker.errors.ImageNotFound:
+        client.images.pull(_JFS_HOME_HELPER_IMAGE)
+    client.containers.run(
+        _JFS_HOME_HELPER_IMAGE,
+        ["sh", "-c", "mkdir -p /mnt/data && chown 1000:1000 /mnt/data"],
+        volumes={vol_name: {"bind": "/mnt", "mode": "rw"}},
+        remove=True,
     )
 
 

@@ -63,6 +63,32 @@ prints it as `.Setting.Name`. Getting this wrong makes the Docker volume
 plugin fail to mount at all (it'll try to treat metaurl as backing a
 *different*, not-yet-formatted filesystem by that name).
 
+### The `.config` collision (why HOME gets redirected)
+
+JuiceFS reserves `.accesslog`, `.config`, and `.stats` as special read-only,
+root-owned files at the root of **every** mount — including a `--subdir`
+mount, not just the true filesystem root. Verified directly: `mkdir
+$HOME/.config` fails with `EEXIST` there, and the existing `.config` can't
+be `rm`'d either. That's fatal for Firefox (and virtually every GTK/XDG
+app) since `~/.config` needs to be a real, writable directory.
+
+So the per-user volume is **not** bind-mounted straight at `bind_path`
+(`/config`/`/home/lwp`) — instead:
+- it's mounted at `/mnt/lwp-jfs` inside the container,
+- `HOME` is overridden to `/mnt/lwp-jfs/data` — a real subdirectory *inside*
+  that mount, one level below the reserved names, pre-created (and
+  `chown 1000:1000`'d — the PUID/PGID every app runs as) by
+  `_ensure_juicefs_home_dir` so apps that assume `$HOME` already exists
+  don't fail on first boot,
+- `bind_path` itself gets an empty `tmpfs` mount — just enough to stop
+  Docker auto-creating (and leaking) an anonymous volume for the image's
+  declared `VOLUME bind_path`; nothing actually uses that path anymore.
+
+Verified end-to-end against a real `lwp-firefox` container (called
+`_docker_start_sync` directly, not just the plugin in isolation): Selkies
+came up clean and Firefox launched with a full, healthy process tree —
+no permission errors, `.config` a normal writable directory owned by `abc`.
+
 ## Explicitly out of scope (for now)
 
 - **Migrating existing users.** This only affects volumes created for new
