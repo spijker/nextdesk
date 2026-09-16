@@ -4,6 +4,16 @@
     "OverridePostUpdatePage": "",
     "DisableFirefoxStudies": true,
     "DontCheckDefaultBrowser": true,
-    "SkipTermsOfUse": true
+    "SkipTermsOfUse": true,
+    "Preferences": {
+      "browser.link.open_newwindow": {
+        "Value": 1,
+        "Status": "locked"
+      },
+      "browser.link.open_newwindow.restriction": {
+        "Value": 0,
+        "Status": "locked"
+      }
+    }
   }
 }
