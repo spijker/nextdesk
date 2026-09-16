@@ -1,4 +1,4 @@
-.PHONY: dev dev-all dev-desktop down logs ps build build-containers migrate shell-backend shell-db test lint package-nc-app
+.PHONY: dev dev-all dev-desktop down clean-sessions reset logs ps build build-containers migrate shell-backend shell-db test lint package-nc-app
 
 COMPOSE = docker compose -f compose/docker-compose.yml --env-file compose/.env
 
@@ -14,11 +14,17 @@ dev-all: build-containers ## Rebuild ALL session images, then start the dev stac
 dev-desktop: ## Start full dev stack + webtop desktop for session testing
 	$(COMPOSE) --profile testing up --build --remove-orphans
 
-down: ## Stop all services (including webtop if running)
+down: ## Stop all services (including webtop) + any still-running session containers/networks
 	$(COMPOSE) --profile testing down
+	$(MAKE) clean-sessions
 
-reset: ## Stop and wipe all volumes (fresh DB)
+clean-sessions: ## Stop/remove dynamically-spawned session containers + VPN networks (docker-compose doesn't manage these — container.py creates them directly, tagged lwp.managed=true). Leaves user data volumes (lwp-home-*, lwp-config-*) alone.
+	@docker ps -aq --filter "label=lwp.managed=true" | xargs -r docker rm -f
+	@docker network ls -q --filter "label=lwp.managed=true" | xargs -r docker network rm
+
+reset: ## Stop and wipe all volumes (fresh DB) + any session containers/networks
 	$(COMPOSE) --profile testing down -v
+	$(MAKE) clean-sessions
 
 logs: ## Follow logs (all services)
 	$(COMPOSE) logs -f
