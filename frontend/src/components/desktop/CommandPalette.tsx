@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { AppWindow as WindowIcon, Rocket, Search, Settings2 } from "lucide-react";
+import { AppWindow as WindowIcon, Search, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 import client from "@/api/client";
 import type { App, Session } from "@/types";
 import { useAuthStore } from "@/store/auth";
 import { useDesktopStore } from "@/store/desktop";
 import { cn } from "@/lib/utils";
+import { appIconUrl } from "@/lib/appIcon";
 
 interface Command {
   id: string;
@@ -71,11 +72,9 @@ export function CommandPalette({ apps, onClose }: { apps: App[]; onClose(): void
         title: app.name,
         hint: "Launch app",
         keywords: app.category,
-        icon: app.icon_url
-          ? <img src={app.icon_url} alt="" className="h-4 w-4 object-contain" />
-          : <Rocket className="h-4 w-4" />,
+        icon: <img src={appIconUrl(app)} alt="" className="h-4 w-4 object-contain" />,
         run: () => {
-          setLaunching({ appId: app.id, appName: app.name, appIcon: app.icon_url || "🖥️" });
+          setLaunching({ appId: app.id, appName: app.name, appIcon: appIconUrl(app) });
           launch.mutate(app);
         },
       });

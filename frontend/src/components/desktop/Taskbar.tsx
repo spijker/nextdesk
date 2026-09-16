@@ -10,6 +10,7 @@ import { useAuthStore } from "@/store/auth";
 import { getSnapshot } from "@/lib/sessionFrames";
 import { ContextMenu } from "./ContextMenu";
 import { cn } from "@/lib/utils";
+import { appIconUrl, LWP_LOGO } from "@/lib/appIcon";
 import client from "@/api/client";
 import type { App } from "@/types";
 
@@ -303,7 +304,7 @@ function QuickLaunch({
   const handleLaunch = async (appId: string) => {
     const app = appMap[appId];
     if (!app) return;
-    setLaunching({ appId: app.id, appName: app.name, appIcon: app.icon_url || "🖥️" });
+    setLaunching({ appId: app.id, appName: app.name, appIcon: appIconUrl(app) });
     try {
       const res = await client.post("/api/sessions", { app_id: appId });
       openWindow(res.data, app);
@@ -344,10 +345,16 @@ function QuickLaunch({
             {isRunning && (
               <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-green-400" />
             )}
-            {app?.icon_url ? (
-              <img src={app.icon_url} alt="" className="h-5 w-5 object-contain" />
-            ) : (
-              <span className="text-sm">🖥️</span>
+            {app && (
+              <img
+                src={appIconUrl(app)}
+                alt=""
+                className="h-5 w-5 object-contain"
+                onError={(e) => {
+                  const img = e.target as HTMLImageElement;
+                  if (img.src !== LWP_LOGO) img.src = LWP_LOGO;
+                }}
+              />
             )}
           </button>
         );

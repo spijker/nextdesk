@@ -13,6 +13,7 @@ import { useDesktopStore } from "@/store/desktop";
 import { cn } from "@/lib/utils";
 import { NcAvatar } from "@/components/desktop/NcAvatar";
 import { VNC_DISPLAY_MODES, type VncDisplayMode } from "@/lib/vncDisplay";
+import { appIconUrl, LWP_LOGO } from "@/lib/appIcon";
 import type { App } from "@/types";
 
 const PRESETS = [
@@ -718,9 +719,15 @@ function MyWebApps() {
         <ul className="space-y-1.5">
           {mine.map((a) => (
             <li key={a.id} className="flex items-center gap-3 rounded-lg border border-gray-200 px-3 py-2 dark:border-gray-700">
-              {a.icon_url
-                ? <img src={a.icon_url} alt="" className="h-5 w-5 shrink-0 object-contain" />
-                : <Monitor className="h-4 w-4 shrink-0 text-gray-400" />}
+              <img
+                src={appIconUrl(a)}
+                alt=""
+                className="h-5 w-5 shrink-0 object-contain"
+                onError={(e) => {
+                  const img = e.target as HTMLImageElement;
+                  if (img.src !== LWP_LOGO) img.src = LWP_LOGO;
+                }}
+              />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm">{a.name}</p>
                 <p className="truncate text-xs text-gray-400">{a.web_url}</p>

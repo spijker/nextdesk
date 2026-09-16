@@ -5,6 +5,7 @@ import client from "@/api/client";
 import type { App, Session } from "@/types";
 import { useDesktopStore } from "@/store/desktop";
 import { cn } from "@/lib/utils";
+import { appIconUrl, LWP_LOGO } from "@/lib/appIcon";
 
 interface Props { apps: App[] }
 
@@ -15,7 +16,7 @@ export function DesktopTiles({ apps }: Props) {
     mutationFn: (appId: string) => client.post<Session>(`/api/sessions`, { app_id: appId }),
     onMutate: (appId) => {
       const app = apps.find((a) => a.id === appId);
-      if (app) setLaunching({ appId, appName: app.name, appIcon: app.icon_url ?? "" });
+      if (app) setLaunching({ appId, appName: app.name, appIcon: appIconUrl(app) });
     },
     onSuccess: (res) => {
       setLaunching(null);
@@ -66,12 +67,16 @@ export function DesktopTiles({ apps }: Props) {
             >
               {isLaunching ? (
                 <Loader2 className="h-10 w-10 animate-spin text-white/40" />
-              ) : app.icon_url ? (
-                <img src={app.icon_url} alt="" className="h-10 w-10 rounded-xl object-contain" />
               ) : (
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-600 text-xl">
-                  🖥️
-                </div>
+                <img
+                  src={appIconUrl(app)}
+                  alt=""
+                  className="h-10 w-10 rounded-xl object-contain"
+                  onError={(e) => {
+                    const img = e.target as HTMLImageElement;
+                    if (img.src !== LWP_LOGO) img.src = LWP_LOGO;
+                  }}
+                />
               )}
               <span className="text-xs font-medium text-white/80 leading-tight line-clamp-2">
                 {app.name}

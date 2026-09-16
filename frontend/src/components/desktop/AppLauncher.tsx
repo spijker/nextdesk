@@ -8,6 +8,7 @@ import { useDesktopStore } from "@/store/desktop";
 import { useAuthStore } from "@/store/auth";
 import { ContextMenu } from "./ContextMenu";
 import { cn } from "@/lib/utils";
+import { appIconUrl, LWP_LOGO } from "@/lib/appIcon";
 
 // Badge distinguishing web-native apps from VNC desktop apps.
 function appBadge(app: App): { label: string; cls: string } {
@@ -31,7 +32,7 @@ function AppRow({
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData("lwp/appId", app.id);
     e.dataTransfer.setData("lwp/appName", app.name);
-    e.dataTransfer.setData("lwp/appIcon", app.icon_url || "");
+    e.dataTransfer.setData("lwp/appIcon", appIconUrl(app));
     e.dataTransfer.effectAllowed = "copy";
   };
 
@@ -46,16 +47,15 @@ function AppRow({
     >
       <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/10">
         {isLaunching && <span className="absolute inset-0 rounded-lg border-2 border-white/40 animate-ping" />}
-        {app.icon_url ? (
-          <img
-            src={app.icon_url}
-            alt=""
-            className="h-7 w-7 object-contain"
-            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-          />
-        ) : (
-          <span className="text-xl">🖥️</span>
-        )}
+        <img
+          src={appIconUrl(app)}
+          alt=""
+          className="h-7 w-7 object-contain"
+          onError={(e) => {
+            const img = e.target as HTMLImageElement;
+            if (img.src !== LWP_LOGO) img.src = LWP_LOGO;
+          }}
+        />
       </div>
 
       <div className="min-w-0 flex-1">
@@ -136,7 +136,7 @@ export function AppLauncher({ onClose }: { onClose(): void }) {
   const handleLaunch = (app: App) => {
     if (launchingId) return;
     setLaunchingId(app.id);
-    setLaunching({ appId: app.id, appName: app.name, appIcon: app.icon_url || "🖥️" });
+    setLaunching({ appId: app.id, appName: app.name, appIcon: appIconUrl(app) });
     launch.mutate(app.id);
   };
 
@@ -175,7 +175,7 @@ export function AppLauncher({ onClose }: { onClose(): void }) {
         id: `app-${app.id}`,
         type: "app",
         label: app.name,
-        icon: app.icon_url || "🖥️",
+        icon: appIconUrl(app),
         appId: app.id,
       });
     }

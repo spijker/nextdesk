@@ -7,6 +7,7 @@ import type { App, Session } from "@/types";
 import { useDesktopStore, type PinnedItem } from "@/store/desktop";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import { cn } from "@/lib/utils";
+import { appIconUrl, LWP_LOGO } from "@/lib/appIcon";
 
 interface Props {
   item: PinnedItem;
@@ -48,7 +49,7 @@ export function DesktopIcon({ item, apps, selected }: Props) {
         setLaunching({
           appId: app.id,
           appName: app.name,
-          appIcon: app.icon_url || item.icon || "🖥️",
+          appIcon: appIconUrl(app),
         });
       }
       launch.mutate(item.appId);
@@ -110,7 +111,10 @@ export function DesktopIcon({ item, apps, selected }: Props) {
               src={item.icon}
               alt=""
               className={`h-10 w-10 object-contain drop-shadow transition-opacity ${pending ? "opacity-60" : ""}`}
-              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              onError={(e) => {
+                const img = e.target as HTMLImageElement;
+                if (img.src !== LWP_LOGO) img.src = LWP_LOGO;
+              }}
             />
           ) : (
             <span className={`drop-shadow transition-opacity ${pending ? "opacity-60" : ""}`}>

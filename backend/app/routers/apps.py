@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/apps", tags=["apps"])
 # for this type) on the Selkies base — same fixed resource shape the admin
 # UI defaults new web apps to.
 PERSONAL_APP_DEFAULTS = dict(
-    app_type="web", proxy_port=3000,
+    app_type="web", category="Web apps", proxy_port=3000,
     cpu_limit="2000m", mem_limit="2Gi", shm_size="1Gi", mount_home=False,
 )
 
