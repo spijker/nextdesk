@@ -63,6 +63,11 @@ services:
       LWP_BASE_URL: ${LWP_BASE_URL:-http://localhost}
       LWP_ENV: development
       DOCKER_NETWORK: ${DOCKER_NETWORK:-compose_internal}
+      # Experimental — see docs/storage-juicefs.md (local/juicefs-storage branch only)
+      JUICEFS_ENABLED: ${JUICEFS_ENABLED:-false}
+      JUICEFS_NAME: ${JUICEFS_NAME:-}
+      JUICEFS_META_URL: ${JUICEFS_META_URL:-}
+      JUICEFS_VOLUME_DRIVER: ${JUICEFS_VOLUME_DRIVER:-juicedata/juicefs}
     volumes:
       - ../backend:/app
       - /var/run/docker.sock:/var/run/docker.sock

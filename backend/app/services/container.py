@@ -284,6 +284,7 @@ def _docker_start_sync(
 
     # Volumes
     volumes: dict = {}
+    tmpfs: dict = {}
     if mount_home:
         if app_type in SELKIES_APP_TYPES:
             # LinuxServer.io images keep all user state under /config
@@ -296,16 +297,54 @@ def _docker_start_sync(
             # declared VOLUME /config on every single launch — silently
             # losing all data and leaking a volume every time.
             slug = re.sub(r"[^a-zA-Z0-9_.-]", "-", container_image)
+            subdir = f"users/{user_id}/{slug}"
             vol_name = f"lwp-config-{user_id}-{slug}"[:200]
             bind_path = "/config"
         else:
+            subdir = f"users/{user_id}/home"
             vol_name = f"lwp-home-{user_id}"
             bind_path = "/home/lwp"
-        try:
-            client.volumes.get(vol_name)
-        except docker.errors.NotFound:
-            client.volumes.create(vol_name)
-        volumes[vol_name] = {"bind": bind_path, "mode": "rw"}
+        if settings.juicefs_enabled:
+            # Distinct name prefix from the plain-local-driver volume above —
+            # Docker refuses to create a volume with the same name but a
+            # different driver than one that already exists, so reusing
+            # vol_name here would break for anyone who launched before this
+            # was turned on. Keeps the flag non-destructive to flip either way.
+            vol_name = f"lwp-jfs-{vol_name}"[:200]
+            _ensure_juicefs_volume(client, vol_name, subdir)
+            # JuiceFS reserves .accesslog/.config/.stats as read-only special
+            # files at the root of ANY subdir mount (confirmed: mkdir over
+            # them fails EEXIST, and they can't be rm'd either) — collides
+            # with real apps needing a writable ~/.config (Firefox and
+            # basically every GTK/XDG app). So the volume goes one level to
+            # the side instead of straight at bind_path, HOME points at a
+            # real subdirectory inside it (nothing reserved below the mount
+            # root), and bind_path itself becomes a tmpfs (see below) rather
+            # than being left unbound — which would otherwise make Docker
+            # auto-create (and leak) an anonymous volume for the image's
+            # declared VOLUME bind_path.
+            jfs_mount = "/mnt/lwp-jfs"
+            _ensure_juicefs_home_dir(client, vol_name)
+            volumes[vol_name] = {"bind": jfs_mount, "mode": "rw"}
+            env["HOME"] = f"{jfs_mount}/data"
+            # Browser/app caches are lots of small, frequently-rewritten
+            # files — brutal on a FUSE/network-backed mount (same reasoning
+            # as excluding .cache/** from the Nextcloud rclone mount, see
+            # tuning.md). Caches are disposable by definition, so give them
+            # real local disk instead: bind_path is already going to a
+            # throwaway tmpfs stub below (to stop Docker auto-creating an
+            # anonymous volume for the image's declared VOLUME there) — just
+            # reuse that same tmpfs for the cache dir instead of wasting it.
+            # Capped so a runaway cache can't eat host RAM; gone automatically
+            # on container removal, no cleanup step needed.
+            env["XDG_CACHE_HOME"] = f"{bind_path}/cache"
+            tmpfs[bind_path] = "size=1g,uid=1000,gid=1000"
+        else:
+            try:
+                client.volumes.get(vol_name)
+            except docker.errors.NotFound:
+                client.volumes.create(vol_name)
+            volumes[vol_name] = {"bind": bind_path, "mode": "rw"}
 
     shm_bytes = _parse_size(shm_size)
 
@@ -325,6 +364,7 @@ def _docker_start_sync(
     host_config = api.create_host_config(
         network_mode=network,
         binds=volumes or None,
+        tmpfs=tmpfs or None,
         shm_size=shm_bytes,
         devices=devices or None,
         cap_add=cap_add or None,
@@ -370,6 +410,55 @@ def _docker_start_sync(
                     pass  # already connected
     log.info("Started Docker container %s (image=%s)", pod_name, container_image)
     return pod_name  # Docker network resolves container by name
+
+
+def _ensure_juicefs_volume(client, vol_name: str, subdir: str) -> None:
+    """Idempotently create a Docker volume backed by one subdirectory of the
+    existing shared JuiceFS filesystem, via the juicedata/juicefs Docker
+    volume plugin. One filesystem, one subdir per (user, app) — not one
+    JuiceFS filesystem per user. The plugin itself must already be
+    installed on the host (`docker plugin install juicedata/juicefs
+    --alias <juicefs_volume_driver> --grant-all-permissions`) — an
+    operator step outside this app, see docs/storage-juicefs.md."""
+    import docker
+    try:
+        client.volumes.get(vol_name)
+        return
+    except docker.errors.NotFound:
+        pass
+    client.volumes.create(
+        vol_name,
+        driver=settings.juicefs_volume_driver,
+        driver_opts={
+            "name": settings.juicefs_name,
+            "metaurl": settings.juicefs_meta_url,
+            "subdir": subdir,
+        },
+    )
+
+
+_JFS_HOME_HELPER_IMAGE = "alpine:3.20"
+
+
+def _ensure_juicefs_home_dir(client, vol_name: str) -> None:
+    """Pre-create the real 'data' subdirectory HOME gets pointed at (see
+    _docker_start_sync) inside a freshly-created JuiceFS volume, owned by
+    the PUID/PGID (1000:1000) every session container runs its app as —
+    some apps assume $HOME already exists (rather than mkdir -p'ing it
+    themselves), and it has to be writable by that uid, not root (this
+    helper itself runs as root). One-off throwaway container; cheap and
+    idempotent."""
+    import docker
+    try:
+        client.images.get(_JFS_HOME_HELPER_IMAGE)
+    except docker.errors.ImageNotFound:
+        client.images.pull(_JFS_HOME_HELPER_IMAGE)
+    client.containers.run(
+        _JFS_HOME_HELPER_IMAGE,
+        ["sh", "-c", "mkdir -p /mnt/data && chown 1000:1000 /mnt/data"],
+        volumes={vol_name: {"bind": "/mnt", "mode": "rw"}},
+        remove=True,
+    )
 
 
 def _live_vpn_network(client, user_id: str):

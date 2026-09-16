@@ -61,6 +61,16 @@ class Settings(BaseSettings):
     home_storage_class: str = "standard"   # K8s StorageClass for user home PVCs
     home_pvc_size: str = "5Gi"             # per-user PVC size
 
+    # JuiceFS-backed home volumes (Docker/dev only — see docs/storage-juicefs.md).
+    # For K8s, point home_storage_class at your JuiceFS CSI StorageClass
+    # instead; no code change needed there. Off by default — one existing
+    # JuiceFS filesystem, one subdirectory per (user, app), not one
+    # filesystem per user.
+    juicefs_enabled: bool = False
+    juicefs_name: str = ""                              # `juicefs format` filesystem name
+    juicefs_meta_url: str = ""                           # metadata engine URL, e.g. redis://host:6379/1
+    juicefs_volume_driver: str = "juicedata/juicefs"      # Docker volume plugin alias
+
     # Session defaults
     max_sessions_per_user: int = 2
     session_timeout_hours: int = 8
