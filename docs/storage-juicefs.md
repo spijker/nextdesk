@@ -57,6 +57,12 @@ JUICEFS_NAME=<your existing `juicefs format` filesystem name>
 JUICEFS_META_URL=<your metadata engine URL, e.g. redis://host:6379/1>
 ```
 
+`JUICEFS_NAME` is the filesystem's name, not its storage backend type (e.g.
+`s3`/`minio`) — easy to mix up. If unsure, `juicefs status "$JUICEFS_META_URL"`
+prints it as `.Setting.Name`. Getting this wrong makes the Docker volume
+plugin fail to mount at all (it'll try to treat metaurl as backing a
+*different*, not-yet-formatted filesystem by that name).
+
 ## Explicitly out of scope (for now)
 
 - **Migrating existing users.** This only affects volumes created for new
