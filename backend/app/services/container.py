@@ -319,14 +319,26 @@ def _docker_start_sync(
             # basically every GTK/XDG app). So the volume goes one level to
             # the side instead of straight at bind_path, HOME points at a
             # real subdirectory inside it (nothing reserved below the mount
-            # root), and bind_path gets an empty tmpfs stub just to stop
-            # Docker auto-creating (and leaking) an anonymous volume for the
-            # image's declared VOLUME bind_path — nothing else uses it.
+            # root), and bind_path itself becomes a tmpfs (see below) rather
+            # than being left unbound — which would otherwise make Docker
+            # auto-create (and leak) an anonymous volume for the image's
+            # declared VOLUME bind_path.
             jfs_mount = "/mnt/lwp-jfs"
             _ensure_juicefs_home_dir(client, vol_name)
             volumes[vol_name] = {"bind": jfs_mount, "mode": "rw"}
-            tmpfs[bind_path] = ""
             env["HOME"] = f"{jfs_mount}/data"
+            # Browser/app caches are lots of small, frequently-rewritten
+            # files — brutal on a FUSE/network-backed mount (same reasoning
+            # as excluding .cache/** from the Nextcloud rclone mount, see
+            # tuning.md). Caches are disposable by definition, so give them
+            # real local disk instead: bind_path is already going to a
+            # throwaway tmpfs stub below (to stop Docker auto-creating an
+            # anonymous volume for the image's declared VOLUME there) — just
+            # reuse that same tmpfs for the cache dir instead of wasting it.
+            # Capped so a runaway cache can't eat host RAM; gone automatically
+            # on container removal, no cleanup step needed.
+            env["XDG_CACHE_HOME"] = f"{bind_path}/cache"
+            tmpfs[bind_path] = "size=1g,uid=1000,gid=1000"
         else:
             try:
                 client.volumes.get(vol_name)

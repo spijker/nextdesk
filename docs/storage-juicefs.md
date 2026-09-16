@@ -89,6 +89,23 @@ Verified end-to-end against a real `lwp-firefox` container (called
 came up clean and Firefox launched with a full, healthy process tree —
 no permission errors, `.config` a normal writable directory owned by `abc`.
 
+### Caches skip JuiceFS entirely
+
+Browser/app caches are lots of small, frequently-rewritten files — the
+exact workload that's brutal on a FUSE mount (same reasoning as excluding
+`.cache/**` from the Nextcloud rclone mount, see
+[tuning.md](tuning.md#what-to-store-on-nextcloud-vs-home-volume)). Since
+`bind_path` is already a throwaway tmpfs stub (see above), `XDG_CACHE_HOME`
+is pointed at a subdirectory of that same tmpfs (`size=1g,uid=1000,gid=1000`)
+instead of wasting it — caches get real local (RAM-backed) storage, capped
+so a runaway cache can't eat host memory, and vanish automatically on
+container removal, no cleanup step needed.
+
+Verified: Firefox/Mesa/fontconfig all created their cache dirs under
+`$XDG_CACHE_HOME` on the tmpfs (`fontconfig/`, `mesa_shader_cache/`,
+`mozilla/`), and `$HOME/.cache` on the actual JuiceFS-backed volume never
+got created at all.
+
 ## Explicitly out of scope (for now)
 
 - **Migrating existing users.** This only affects volumes created for new
@@ -101,8 +118,10 @@ no permission errors, `.config` a normal writable directory owned by `abc`.
 
 ## Known tradeoff
 
-FUSE overhead on small-file/random-write workloads (browser profile
-SQLite, caches) — the same class of problem that pushed the Nextcloud
-mount to `--vfs-cache-mode full`. Lean on JuiceFS's local client cache, and
-keep genuinely hot scratch data (`.cache/**`-style dirs) off it if it turns
-out to matter in practice — nothing here does that automatically yet.
+FUSE overhead on small-file/random-write workloads — the same class of
+problem that pushed the Nextcloud mount to `--vfs-cache-mode full`.
+`XDG_CACHE_HOME` already routes caches around it (see above); the
+remaining risk is anything with a SQLite-heavy write pattern that lands
+directly under `$HOME` rather than `$XDG_CACHE_HOME` (e.g. a browser
+profile's places.sqlite) — lean on JuiceFS's local client cache for that,
+and revisit if it turns out to matter in practice.
