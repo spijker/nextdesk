@@ -10,8 +10,8 @@
 /usr/local/bin/lwp-vpn-relay.py &
 
 # Truecolor-aware apps (opencode) commonly check COLORTERM directly rather
-# than querying terminfo — screen's own 'truecolor on' (screenrc) handles the
-# terminal escape sequences, this handles the env-var check.
+# than querying terminfo — tmux's own terminal-overrides (tmux.conf) handles
+# the terminal escape sequences, this handles the env-var check.
 export COLORTERM=truecolor
 
 # User-chosen terminal font (Profile → Terminal appearance), applied by the
@@ -21,13 +21,14 @@ FONT_ARGS=()
 [ -n "${LWP_TERM_FONT_FAMILY:-}" ] && FONT_ARGS+=(-t "fontFamily=${LWP_TERM_FONT_FAMILY}")
 [ -n "${LWP_TERM_FONT_SIZE:-}" ]   && FONT_ARGS+=(-t "fontSize=${LWP_TERM_FONT_SIZE}")
 
-# Every ttyd client attaches the same persistent GNU screen session (-xRR:
-# multi-attach, reattach or create). Closing/reloading the tab keeps whatever
-# is running; reopening reattaches. screen over tmux: it leaves the mouse
-# alone, so browser-native text selection and copy/paste just work.
+# Every ttyd client attaches the same persistent tmux session (-A: attach if
+# it exists, create it otherwise). Closing/reloading the tab keeps whatever
+# is running; reopening reattaches. Mouse mode is left off in tmux.conf, so
+# browser-native text selection and copy/paste keep working the same as
+# they did under screen.
 # DOM renderer: xterm.js WebGL canvas can go black on iframe resizes
 # (lost GL context); DOM is plenty fast for a terminal and never blanks.
 exec ttyd --port 7681 --writable --base-path / \
      --ssl --ssl-cert /etc/ttyd/cert.pem --ssl-key /etc/ttyd/key.pem \
      -t rendererType=dom "${FONT_ARGS[@]}" \
-     screen -xRR -S lwp
+     tmux new-session -A -s lwp

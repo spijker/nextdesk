@@ -5,8 +5,8 @@ RUN apt-get update -qq && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         curl ca-certificates openssl bash-completion htop less \
         git jq joe vim \
-        openssh-client netcat-openbsd oathtool screen \
-        python3-minimal python3-pip \
+        openssh-client netcat-openbsd oathtool \
+        python3-minimal python3-pip tmux \
         fuse3 unzip && \
     pip install --no-cache-dir --break-system-packages ruff yamllint && \
     ARCH=$(uname -m) && \
@@ -56,7 +56,7 @@ RUN userdel -r ubuntu 2>/dev/null || true && \
 # jsonlint. `nvm` itself is available in the shell (bash.bashrc); node/npm are
 # on PATH directly via /opt/nvm/current.
 # opencode lives in Terminator instead (containers/terminator/) — it's a rich
-# TUI and the ttyd→xterm.js→screen chain here doesn't render it correctly;
+# TUI and the ttyd→xterm.js→tmux chain here doesn't render it correctly;
 # Terminator is a real X11 terminal (VNC), no translation layers to fight.
 ARG NVM_VER=0.40.5
 ENV NVM_DIR=/opt/nvm
@@ -83,7 +83,7 @@ RUN mkdir -p /etc/ttyd && \
 
 # Nextcloud rclone mount (mounts when LWP_NC_URL is set; the orchestrator
 # attaches /dev/fuse + SYS_ADMIN when the user has NC configured).
-COPY screenrc              /etc/screenrc
+COPY tmux.conf              /etc/tmux.conf
 COPY lwp-nc-mount.sh       /usr/local/bin/lwp-nc-mount.sh
 COPY lwp-mounts.sh         /usr/local/bin/lwp-mounts.sh
 COPY lwp-terminal-entry.sh /usr/local/bin/lwp-terminal-entry.sh

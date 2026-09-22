@@ -34,7 +34,7 @@ and admins can toggle it per app in Admin → Apps.
 | Headlamp | Desktop (Selkies) | Kubernetes desktop UI |
 | FileZilla, Remmina | Desktop (Selkies) | FTP/SFTP, RDP/VNC client |
 | Ferdium | Desktop (Selkies) | messaging aggregator |
-| **Terminal** | web | ttyd → persistent GNU screen session (survives tab close/reload; Profile → "Keep Terminal running in the background" exempts it from idle suspend/reap, capped 48 h) + ssh/nc, kubectl/k9s/kubens/stern, bao (OpenBao), yq/jq/git/vim, node via nvm, ruff/yamllint/jsonlint |
+| **Terminal** | web | ttyd → persistent tmux session (survives tab close/reload; Profile → "Keep Terminal running in the background" exempts it from idle suspend/reap, capped 48 h) + ssh/nc, kubectl/k9s/kubens/stern, bao (OpenBao), yq/jq/git/vim, node via nvm, ruff/yamllint/jsonlint |
 | **JupyterLab** | web | notebooks |
 | **pgweb** | web | Postgres web client |
 | **htop** | web | ttyd-wrapped TUI |
