@@ -1,8 +1,9 @@
 FROM lwp-selkies-base
 
-# Firefox from Mozilla (no snap, no Chrome sandbox issues)
+# Firefox from Mozilla (no snap, no Chrome sandbox issues). zip packs the
+# link/attachment bridge extension (see start.sh) into an xpi at launch.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libdbus-glib-1-2 libxt6 xz-utils \
+      libdbus-glib-1-2 libxt6 xz-utils zip \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fL "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US" \
         -o /tmp/firefox.tar.xz \
@@ -21,5 +22,9 @@ ENV MOZ_DISABLE_RDD_SANDBOX=1
 
 COPY start.sh /usr/local/bin/lwp-kiosk-start.sh
 RUN chmod +x /usr/local/bin/lwp-kiosk-start.sh
+
+# Link/attachment bridge extension source — start.sh packs it into an xpi
+# (with the session token baked in) fresh on every launch.
+COPY extension/ /opt/lwp-kiosk-bridge/
 
 ENV LWP_START_APP="/usr/local/bin/lwp-kiosk-start.sh"

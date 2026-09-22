@@ -8,6 +8,7 @@ import hashlib
 import logging
 import os
 import re
+import urllib.parse
 
 import httpx
 
@@ -209,18 +210,16 @@ def build_webdav_url(url: str, nc_user: str) -> str:
     return f"{base}/remote.php/dav/files/{nc_user}"
 
 
-async def get_user_nc_env(db, user, home_dir: str = "/home/lwp") -> dict:
-    """
-    Return env vars to inject into a session container for Nextcloud WebDAV mount.
-    Returns {} if NC is not configured for the user.
-    """
+async def _user_nc_creds(db, user) -> tuple[str, str, str, dict] | None:
+    """(webdav_url, nc_user, nc_pass, sys_cfg), or None if NC isn't configured
+    for this user. Shared credential resolution for get_user_nc_env and
+    upload_bytes."""
     sys_cfg = await get_system_config(db)
 
-    # Determine effective URL and credentials
     url = user.nc_url or sys_cfg["url"]
     if not url:
-        log.info("NC mount skipped for %s: no personal nc_url and no system nc.url configured", user.username)
-        return {}
+        log.info("NC skipped for %s: no personal nc_url and no system nc.url configured", user.username)
+        return None
 
     nc_user = user.nc_username or user.username
 
@@ -230,11 +229,22 @@ async def get_user_nc_env(db, user, home_dir: str = "/home/lwp") -> dict:
         # Use derived password (only works if user was provisioned this way)
         nc_pass = _derive_user_password(user.username)
     else:
-        log.info("NC mount skipped for %s: no personal app-password and no system nc.admin_password "
+        log.info("NC skipped for %s: no personal app-password and no system nc.admin_password "
                  "(connect Nextcloud in Profile, or set it in Admin - Settings)", user.username)
-        return {}
+        return None
 
-    webdav_url = build_webdav_url(url, nc_user)
+    return build_webdav_url(url, nc_user), nc_user, nc_pass, sys_cfg
+
+
+async def get_user_nc_env(db, user, home_dir: str = "/home/lwp") -> dict:
+    """
+    Return env vars to inject into a session container for Nextcloud WebDAV mount.
+    Returns {} if NC is not configured for the user.
+    """
+    creds = await _user_nc_creds(db, user)
+    if not creds:
+        return {}
+    webdav_url, nc_user, nc_pass, sys_cfg = creds
 
     return {
         "LWP_NC_URL":   webdav_url,
@@ -247,3 +257,34 @@ async def get_user_nc_env(db, user, home_dir: str = "/home/lwp") -> dict:
             os.path.basename((sys_cfg.get("mount_path") or "Files").rstrip("/")) or "Files"
         ),
     }
+
+
+def nc_mount_name(sys_cfg: dict) -> str:
+    """Basename of the admin-configured NC mount folder (e.g. 'Files') — the
+    first path segment under a session's home where the WebDAV mount lands."""
+    return os.path.basename((sys_cfg.get("mount_path") or "Files").rstrip("/")) or "Files"
+
+
+async def upload_bytes(db, user, rel_path: str, data: bytes) -> bool:
+    """PUT raw bytes to the user's Nextcloud at rel_path (relative to their
+    WebDAV root), creating parent collections as needed. Used by the kiosk
+    attachment handoff to stash a downloaded file where the target app's own
+    rclone mount (LWP_NC_MOUNT) will pick it up. Returns False if NC isn't
+    configured for the user (mirrors get_user_nc_env)."""
+    creds = await _user_nc_creds(db, user)
+    if not creds:
+        return False
+    webdav_url, nc_user, nc_pass, _sys_cfg = creds
+
+    # Percent-encode each segment ourselves — passing spaces/unicode straight
+    # through in the URL string is not reliably safe across httpx versions.
+    parts = [urllib.parse.quote(p) for p in rel_path.strip("/").split("/") if p]
+    async with httpx.AsyncClient(timeout=NC_TIMEOUT, auth=(nc_user, nc_pass)) as client:
+        # MKCOL each parent collection — 405/409 if it already exists, fine either way.
+        prefix = ""
+        for part in parts[:-1]:
+            prefix += "/" + part
+            await client.request("MKCOL", webdav_url + prefix)
+        resp = await client.put(webdav_url + "/" + "/".join(parts), content=data)
+        resp.raise_for_status()
+    return True

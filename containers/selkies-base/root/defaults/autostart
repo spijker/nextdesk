@@ -5,24 +5,33 @@
 # backend to end the session when the app's window closes (LWP is one-app-
 # per-container, not a general-purpose desktop).
 
-# LWP_OPEN_FILE (file manager "Open with…") is passed as the first argument;
-# wait for the rclone Nextcloud mount to expose the file (up to 60s). Only
-# pass it if it actually appeared, so a slow/failed mount doesn't hand the
-# app a bad path (which would just show an empty start screen).
-if [ -n "${LWP_OPEN_FILE:-}" ]; then
-    for _i in $(seq 1 300); do
-        [ -e "${LWP_OPEN_FILE}" ] && break
-        sleep 0.2
-    done
-    if [ -e "${LWP_OPEN_FILE}" ]; then
-        ${LWP_START_APP} "${LWP_OPEN_FILE}"
-    else
-        echo "lwp-autostart: LWP_OPEN_FILE never appeared (${LWP_OPEN_FILE}) — starting without it" >&2
+# LWP_OPEN_FILE (file manager "Open with…", or the kiosk link/attachment
+# bridge — see sessions.py's /bridge/open and /bridge/attachment) is passed
+# as the first argument. A URL (bridge case) is passed straight through —
+# there's nothing on disk to wait for. A filesystem path (file-manager case)
+# waits for the rclone Nextcloud mount to expose it (up to 60s), and is only
+# passed if it actually appeared, so a slow/failed mount doesn't hand the app
+# a bad path (which would just show an empty start screen).
+case "${LWP_OPEN_FILE:-}" in
+    "")
         ${LWP_START_APP}
-    fi
-else
-    ${LWP_START_APP}
-fi
+        ;;
+    http://*|https://*)
+        ${LWP_START_APP} "${LWP_OPEN_FILE}"
+        ;;
+    *)
+        for _i in $(seq 1 300); do
+            [ -e "${LWP_OPEN_FILE}" ] && break
+            sleep 0.2
+        done
+        if [ -e "${LWP_OPEN_FILE}" ]; then
+            ${LWP_START_APP} "${LWP_OPEN_FILE}"
+        else
+            echo "lwp-autostart: LWP_OPEN_FILE never appeared (${LWP_OPEN_FILE}) — starting without it" >&2
+            ${LWP_START_APP}
+        fi
+        ;;
+esac
 
 # App exited — notify backend so it tears the session down instead of
 # leaving a dead-but-"running" container behind.

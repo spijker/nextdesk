@@ -1,9 +1,11 @@
 import asyncio
 import base64
+import ipaddress
 import json
 import logging
 import os
 import re
+import urllib.parse
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
@@ -96,6 +98,10 @@ async def create_session(
         raise HTTPException(status_code=404, detail="App not found or disabled")
 
     open_path = body.get("open_path")
+    # Raw value for LWP_OPEN_FILE, bypassing the NC-mount path join open_path
+    # gets below — used by the kiosk link bridge, where the target is a URL
+    # rather than a path under the user's Nextcloud mount.
+    open_external = body.get("open_external")
 
     # Nextcloud mount env — needed up here so "Open with…" can target the real
     # mount path (admins may rename it from the default Files). Selkies-based
@@ -139,6 +145,8 @@ async def create_session(
                     await db.commit()
                 if open_path and nc_env:
                     await _enqueue_open_in(existing.session_token, mount_base, str(open_path))
+                elif open_external:
+                    await _enqueue_open_in_raw(existing.session_token, str(open_external))
                 return _session_out(existing, app)
             existing.status = "stopped"
             existing.ended_at = datetime.now(UTC)
@@ -247,6 +255,8 @@ async def create_session(
     if open_path and nc_env:
         safe = os.path.normpath("/" + str(open_path)).lstrip("/")
         effective_env["LWP_OPEN_FILE"] = f"{mount_base.rstrip('/')}/{safe}"
+    elif open_external:
+        effective_env["LWP_OPEN_FILE"] = str(open_external)
 
     # Group policy: recording flag → container records its X display and
     # uploads segments back to us (see lwp-record.sh in kasm-base).
@@ -1149,6 +1159,13 @@ async def _enqueue_open_in(session_token: str, mount_base: str, nc_path: str) ->
         _open_in_events[session_token].append(f"{mount_base.rstrip('/')}/{safe}")
 
 
+async def _enqueue_open_in_raw(session_token: str, value: str) -> None:
+    """Same queue as _enqueue_open_in, but for a value that's already final
+    (a URL) — no NC-mount path join. See the kiosk bridge below."""
+    async with _open_file_lock:
+        _open_in_events[session_token].append(value)
+
+
 @router.get("/open-in/poll")
 async def poll_open_in(
     x_session_token: str | None = Header(default=None),
@@ -1169,6 +1186,151 @@ async def poll_open_in(
     async with _open_file_lock:
         paths = _open_in_events.pop(x_session_token, [])
     return {"paths": paths}
+
+
+# ── Kiosk link/attachment bridge (kiosk browser extension → real app) ─────────
+# The kiosk's Firefox instance runs --kiosk (chromeless) — it can't offer a
+# usable "open in new window" (any window it opens is kiosked too, with no
+# way back) or a usable downloads UI. A bundled extension (containers/kiosk/
+# extension/) intercepts explicit new-window navigations and Office-document
+# downloads and hands them here instead, authenticated by the kiosk session's
+# own token — same trust model as the open-in/open-file endpoints above.
+# Which app each goes to is an admin-wide default (Setting), not per-kiosk:
+# there's no canonical "the Firefox app" in the catalog otherwise.
+
+_BLOCKED_IP_NETS = [ipaddress.ip_network(n) for n in (
+    "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
+    "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16",
+    "198.18.0.0/15", "224.0.0.0/4", "::1/128", "fc00::/7", "fe80::/10",
+)]
+MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9 ._-]+")
+
+
+async def _bridge_user(x_session_token: str | None, db: AsyncSession) -> User:
+    """Resolve the user behind a live kiosk session token."""
+    if not x_session_token:
+        raise HTTPException(status_code=401)
+    sess = await db.scalar(
+        select(Session).where(
+            Session.session_token == x_session_token,
+            Session.status.in_(["running", "starting"]),
+        )
+    )
+    if not sess:
+        raise HTTPException(status_code=404)
+    user = await db.get(User, sess.user_id)
+    if not user:
+        raise HTTPException(status_code=404)
+    return user
+
+
+async def _bridge_target_app(db: AsyncSession, setting_key: str) -> App:
+    app_id = await db.scalar(select(Setting.value).where(Setting.key == setting_key))
+    if not app_id:
+        raise HTTPException(status_code=503, detail=f"No target app configured ({setting_key})")
+    try:
+        app_uuid = uuid.UUID(app_id)
+    except ValueError:
+        raise HTTPException(status_code=503, detail="Configured target app id is invalid")
+    app = await db.scalar(
+        select(App).where(App.id == app_uuid, App.is_enabled == True, App.is_deleted == False)  # noqa: E712
+    )
+    if not app:
+        raise HTTPException(status_code=503, detail="Configured target app not found or disabled")
+    return app
+
+
+def _is_blocked_ip(ip_str: str) -> bool:
+    ip = ipaddress.ip_address(ip_str)
+    return ip.is_multicast or ip.is_reserved or ip.is_unspecified or any(ip in net for net in _BLOCKED_IP_NETS)
+
+
+async def _fetch_attachment(url: str) -> bytes:
+    """Server-side fetch for the attachment bridge. Basic SSRF guards — http(s)
+    only, resolved target can't be a private/loopback/link-local address, no
+    redirects, size capped. The URL comes from a page the admin already
+    pointed the kiosk at, not arbitrary internet input, so this is a
+    pragmatic check rather than a hardened egress proxy (a DNS answer could
+    still change between this check and the connect below)."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(status_code=422, detail="Unsupported URL")
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(parsed.hostname, None)
+    except OSError:
+        raise HTTPException(status_code=422, detail="Could not resolve host")
+    if not infos or any(_is_blocked_ip(i[4][0]) for i in infos):
+        raise HTTPException(status_code=422, detail="URL host not allowed")
+    async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
+        async with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            data = bytearray()
+            async for chunk in resp.aiter_bytes():
+                data.extend(chunk)
+                if len(data) > MAX_ATTACHMENT_BYTES:
+                    raise HTTPException(status_code=413, detail="Attachment too large")
+    return bytes(data)
+
+
+def _safe_filename(name: str) -> str:
+    name = _SAFE_FILENAME_RE.sub("_", os.path.basename(name or "")).strip(" .")
+    return name[:180] or "attachment"
+
+
+@router.post("/bridge/open")
+async def bridge_open_link(
+    body: dict,
+    request: Request,
+    x_session_token: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_session),
+):
+    """Kiosk extension → open a URL (explicit new-window link, or a PDF
+    download) in the admin-configured Firefox app, reusing a running
+    instance for this user if there is one."""
+    user = await _bridge_user(x_session_token, db)
+    url = (body.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=422, detail="url required")
+    app = await _bridge_target_app(db, "kiosk.link_target_app_id")
+    return await create_session(
+        body={"app_id": str(app.id), "open_external": url},
+        request=request, user=user, db=db,
+    )
+
+
+@router.post("/bridge/attachment")
+async def bridge_open_attachment(
+    body: dict,
+    request: Request,
+    x_session_token: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_session),
+):
+    """Kiosk extension → fetch an Office-document download server-side, stash
+    it in the user's Nextcloud, and open it in the admin-configured
+    LibreOffice app. Going via Nextcloud (rather than some new inter-
+    container file path) is what makes it land somewhere the target app's
+    own rclone mount already exposes — see nc_svc.upload_bytes."""
+    user = await _bridge_user(x_session_token, db)
+    url = (body.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=422, detail="url required")
+    app = await _bridge_target_app(db, "kiosk.attachment_target_app_id")
+
+    data = await _fetch_attachment(url)
+    filename = _safe_filename(
+        body.get("filename") or urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1]
+    )
+    sys_cfg = await nc_svc.get_system_config(db)
+    mount_name = nc_svc.nc_mount_name(sys_cfg)
+    rel_path = f"Kiosk Downloads/{filename}"
+    if not await nc_svc.upload_bytes(db, user, f"{mount_name}/{rel_path}", data):
+        raise HTTPException(status_code=503, detail="Nextcloud not configured for this user")
+
+    return await create_session(
+        body={"app_id": str(app.id), "open_path": rel_path},
+        request=request, user=user, db=db,
+    )
 
 
 def _session_out(s: Session, app: App | None = None) -> dict:

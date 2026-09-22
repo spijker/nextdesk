@@ -22,11 +22,20 @@ fi
 BACKEND="${LWP_BACKEND_URL:-http://backend:8000}"
 TOKEN="${LWP_SESSION_TOKEN:-}"
 
-# Open one file: wait for the rclone mount to expose it (up to 60s), then hand
-# it to the running app. Runs in the background so a slow file can't stall the
-# poll loop.
+# Open one item: a URL (kiosk link/attachment bridge — see sessions.py's
+# /bridge/open and /bridge/attachment) is passed straight through, nothing to
+# wait for. A filesystem path (file-manager "Open with…") waits for the
+# rclone mount to expose it (up to 60s) first. Runs in the background so a
+# slow file can't stall the poll loop.
 open_file() {
     local file="$1"
+    case "$file" in
+        http://*|https://*)
+            echo "lwp-opener: opening $file with ${LWP_OPEN_CMD}" >&2
+            setsid ${LWP_OPEN_CMD} "$file" >/dev/null 2>&1 &
+            return
+            ;;
+    esac
     for _j in $(seq 1 300); do
         [ -e "$file" ] && break
         sleep 0.2
@@ -42,9 +51,13 @@ open_file() {
 while true; do
     resp=$(curl -s -m 10 "${BACKEND}/api/sessions/open-in/poll" \
                 -H "X-Session-Token: ${TOKEN}" 2>/dev/null)
-    # Each queued path is a JSON string under the user's mount (/home/lwp/…)
+    # Each queued item is a JSON string: an absolute path under the session's
+    # home (/config/… for Selkies apps, /home/lwp/… otherwise — see the
+    # home_dir comment in sessions.py) or an http(s) URL from the kiosk
+    # bridge. Matching any leading "/" rather than a fixed prefix covers both
+    # home layouts without caring which app image this is.
     printf '%s' "$resp" \
-        | grep -o '"/home/lwp/[^"]*"' \
+        | grep -o '"\(/[^"]*\|https\?://[^"]*\)"' \
         | sed 's/^"//; s/"$//' \
         | while IFS= read -r file; do
             open_file "$file"

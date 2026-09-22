@@ -83,13 +83,19 @@ class Settings(BaseSettings):
     # uploaded mp4 segments: <recordings_dir>/<session_id>/<seq>.mp4
     recordings_dir: str = "/data/recordings"
 
-    # GPU-accelerated encoding for Selkies sessions (VAAPI/Nvidia NVENC via
-    # baseimage-selkies's DRINODE/DRI_NODE). Off by default — needs a real
-    # encode-capable GPU passed through to the Docker host; most server CPUs
-    # (Xeon Scalable included) have no Quick Sync silicon, so check the host
-    # actually has a /dev/dri render node before flipping this on. Docker/dev
-    # only for now — the K8s path would need a device plugin instead.
+    # GPU-accelerated encoding for Selkies sessions. Off by default — needs a
+    # real encode-capable GPU on the Docker host. Docker/dev only for now —
+    # the K8s path would need a device plugin instead.
     gpu_encoding_enabled: bool = False
+    # "vaapi" (Intel Quick Sync / AMD, passed through as a /dev/dri device —
+    # see gpu_dri_node) or "nvidia" (NVENC, passed through via the Nvidia
+    # Container Toolkit — the host needs proprietary driver 580+, installed
+    # from Nvidia's own .run file, and `nvidia-ctk runtime configure
+    # --runtime=docker` already run; see docs.linuxserver.io/images/
+    # docker-baseimage-selkies/ for the full host setup).
+    gpu_vendor: str = "vaapi"
+    # VAAPI only — ignored for gpu_vendor=nvidia (the container toolkit
+    # exposes the right device on its own; AUTO_GPU picks it up).
     gpu_dri_node: str = "/dev/dri/renderD128"
 
     @property

@@ -257,18 +257,31 @@ def _docker_start_sync(
             "PASSWORD": user_id[:16],
             "SUBFOLDER": "/",
         })
-    # GPU-accelerated encoding (VAAPI/NVENC) — only meaningful for Selkies
-    # sessions. Trust-the-operator flag, same convention as JUICEFS_ENABLED:
-    # we can't verify the render node exists from here — this backend runs
+    # GPU-accelerated encoding — only meaningful for Selkies sessions.
+    # Trust-the-operator flag, same convention as JUICEFS_ENABLED: we can't
+    # verify the GPU/render node exists from here — this backend runs
     # inside its own container, so an os.path.exists() check would test OUR
     # filesystem, not the Docker host's (same trap the DockerRootDir/
-    # disk_usage comment above the compose volumes section calls out).
-    # Real validation happens against the actual host below, when the
-    # session container is created — if the node isn't there we fall back
-    # to software encoding instead of failing the launch. DRINODE == DRI_NODE
-    # gets Selkies "zero copy" mode.
+    # disk_usage comment above the compose volumes section calls out). Real
+    # validation happens against the actual host below, when the session
+    # container is created — if it fails we fall back to software encoding
+    # instead of failing the launch.
     gpu_enabled = app_type in SELKIES_APP_TYPES and settings.gpu_encoding_enabled
-    if gpu_enabled:
+    gpu_device_requests = None
+    if gpu_enabled and settings.gpu_vendor == "nvidia":
+        # Nvidia Container Toolkit path — no /dev/dri passthrough needed,
+        # AUTO_GPU picks the device up once the toolkit exposes it. Mirrors
+        # the compose `deploy.resources.reservations.devices` example from
+        # docs.linuxserver.io/images/docker-baseimage-selkies/ exactly
+        # (same driver + capability list), not just a bare `--gpus all`.
+        gpu_device_requests = [docker.types.DeviceRequest(
+            driver="nvidia", count=-1,
+            capabilities=[["compute", "video", "graphics", "utility"]],
+        )]
+    elif gpu_enabled:
+        # VAAPI (Intel Quick Sync / AMD) — DRINODE == DRI_NODE gets
+        # Selkies' "zero copy" mode; device passthrough itself happens
+        # below, alongside the FUSE device.
         env.update({"DRINODE": settings.gpu_dri_node, "DRI_NODE": settings.gpu_dri_node})
     # xpra (stream/web) containers need no extra env — xpra manages its own display
     env.update({str(k): str(v) for k, v in env_json.items()})
@@ -369,7 +382,7 @@ def _docker_start_sync(
         devices.append("/dev/fuse:/dev/fuse:rwm")
         cap_add.append("SYS_ADMIN")
         security_opt.append("apparmor:unconfined")
-    if gpu_enabled:
+    if gpu_enabled and settings.gpu_vendor != "nvidia":
         devices.append(f"{settings.gpu_dri_node}:{settings.gpu_dri_node}:rwm")
 
     # Built manually (create_host_config + create_container + api.start())
@@ -377,13 +390,14 @@ def _docker_start_sync(
     # this combination of network/shm/devices/cap_add/security_opt/init.
     api = client.api
 
-    def _create_and_start(env: dict, devices: list) -> dict:
+    def _create_and_start(env: dict, devices: list, device_requests: list | None) -> dict:
         host_config = api.create_host_config(
             network_mode=network,
             binds=volumes or None,
             tmpfs=tmpfs or None,
             shm_size=shm_bytes,
             devices=devices or None,
+            device_requests=device_requests,
             cap_add=cap_add or None,
             security_opt=security_opt or None,
             # Session entrypoints exec straight into ttyd/supervisord as PID
@@ -413,17 +427,18 @@ def _docker_start_sync(
         return created
 
     try:
-        created = _create_and_start(env, devices)
+        created = _create_and_start(env, devices, gpu_device_requests)
     except docker.errors.APIError:
         if not gpu_enabled:
             raise
-        # The render node didn't exist on THIS host after all — same
+        # The GPU wasn't actually usable on THIS host after all (no render
+        # node, or no Nvidia Container Toolkit configured) — same
         # trust-the-operator gap noted above. Clear the failed container
         # (create_container already reserved pod_name) and relaunch on
         # software encoding rather than failing the whole session.
         log.warning(
-            "GPU device %s unavailable on this Docker host — retrying %s "
-            "with software encoding", settings.gpu_dri_node, pod_name,
+            "GPU (%s) unavailable on this Docker host — retrying %s with "
+            "software encoding", settings.gpu_vendor, pod_name,
         )
         try:
             api.remove_container(pod_name, force=True)
@@ -431,7 +446,7 @@ def _docker_start_sync(
             pass
         env = {k: v for k, v in env.items() if k not in ("DRINODE", "DRI_NODE")}
         devices = [d for d in devices if not d.startswith(f"{settings.gpu_dri_node}:")]
-        created = _create_and_start(env, devices)
+        created = _create_and_start(env, devices, None)
     if vpn_net is not None:
         vpn_net.connect(pod_name, aliases=["vpn"] if is_vpn_gateway else None)
         if is_vpn_gateway:

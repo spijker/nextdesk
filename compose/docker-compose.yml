@@ -72,6 +72,7 @@ services:
       # Off by default — needs a real encode-capable GPU on this Docker host
       # (checked at session-launch time, not here). See services/container.py.
       GPU_ENCODING_ENABLED: ${GPU_ENCODING_ENABLED:-false}
+      GPU_VENDOR: ${GPU_VENDOR:-vaapi}
       GPU_DRI_NODE: ${GPU_DRI_NODE:-/dev/dri/renderD128}
     volumes:
       - ../backend:/app

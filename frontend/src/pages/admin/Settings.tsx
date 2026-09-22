@@ -4,6 +4,7 @@ import { Save, TestTube, Eye, EyeOff, CheckCircle, XCircle } from "lucide-react"
 import { toast } from "sonner";
 import client from "@/api/client";
 import { cn } from "@/lib/utils";
+import type { App } from "@/types";
 
 interface SettingEntry { key: string; value: string; description: string }
 interface NcConfig {
@@ -269,10 +270,16 @@ function SystemSettings() {
   const [level, setLevel] = useState("info");
   const [maint, setMaint] = useState(false);
   const [maintMsg, setMaintMsg] = useState("");
+  const [linkApp, setLinkApp] = useState("");
+  const [attachApp, setAttachApp] = useState("");
 
   const { data: settings = [] } = useQuery<SettingEntry[]>({
     queryKey: ["admin", "settings"],
     queryFn: () => client.get("/api/admin/settings").then((r) => r.data),
+  });
+  const { data: apps = [] } = useQuery<App[]>({
+    queryKey: ["admin", "apps"],
+    queryFn: () => client.get("/api/admin/apps").then((r) => r.data),
   });
 
   useEffect(() => {
@@ -281,6 +288,8 @@ function SystemSettings() {
     setLevel(get("announcement.level") ?? "info");
     setMaint((get("maintenance.enabled") ?? "false") === "true");
     setMaintMsg(get("maintenance.message") ?? "");
+    setLinkApp(get("kiosk.link_target_app_id") ?? "");
+    setAttachApp(get("kiosk.attachment_target_app_id") ?? "");
   }, [settings]);
 
   const save = useMutation({
@@ -289,6 +298,8 @@ function SystemSettings() {
       "announcement.level": level,
       "maintenance.enabled": String(maint),
       "maintenance.message": maintMsg,
+      "kiosk.link_target_app_id": linkApp,
+      "kiosk.attachment_target_app_id": attachApp,
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["admin", "settings"] }); toast.success("Saved"); },
     onError: () => toast.error("Save failed"),
@@ -325,6 +336,30 @@ function SystemSettings() {
           <label className={lbl}>Message shown when a launch is blocked</label>
           <input value={maintMsg} onChange={(e) => setMaintMsg(e.target.value)}
             placeholder="We're doing maintenance — please try again shortly." className={inp} />
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900 space-y-4">
+        <h2 className="text-sm font-semibold">🌐 Kiosk link/attachment handoff</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          Kiosk (web) apps are chromeless — explicit new-window links and PDF
+          downloads open here instead; Office documents (.doc/.xls/.ppt/…) are
+          fetched, dropped into the user's Nextcloud, and opened here instead.
+          Leave blank to disable.
+        </p>
+        <div>
+          <label className={lbl}>Open links / PDFs in</label>
+          <select value={linkApp} onChange={(e) => setLinkApp(e.target.value)} className={inp}>
+            <option value="">— disabled —</option>
+            {apps.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className={lbl}>Open Office documents in</label>
+          <select value={attachApp} onChange={(e) => setAttachApp(e.target.value)} className={inp}>
+            <option value="">— disabled —</option>
+            {apps.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
         </div>
       </div>
 

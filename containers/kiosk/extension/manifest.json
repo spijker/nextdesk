@@ -1,0 +1,14 @@
+{
+  "manifest_version": 2,
+  "name": "LWP Kiosk Bridge",
+  "version": "1.0.0",
+  "description": "Hands explicit new-window links and Office-document downloads off to the LWP backend instead of trying to open them inside the kiosk.",
+  "browser_specific_settings": {
+    "gecko": { "id": "lwp-kiosk-bridge@lwp.internal" }
+  },
+  "permissions": ["webNavigation", "downloads", "tabs", "<all_urls>"],
+  "background": {
+    "scripts": ["session.js", "background.js"],
+    "persistent": true
+  }
+}
