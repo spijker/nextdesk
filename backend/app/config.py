@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     lwp_env: str = "production"
     # Small text shown under the login card — e.g. product/company branding.
     footer_text: str = "Nextdesk — Powered by VPE © 2026"
+    # Timezone passed to every session container (PUID/PGID/TZ is the
+    # standard LinuxServer.io convention — their images set /etc/localtime
+    # from it; see the call sites in services/container.py).
+    tz: str = "UTC"
 
     # Docker (dev only) — network session containers join so Nginx can reach them
     docker_network: str = "compose_internal"
@@ -78,6 +82,15 @@ class Settings(BaseSettings):
     # Session recordings (per-group record_sessions policy) land here as
     # uploaded mp4 segments: <recordings_dir>/<session_id>/<seq>.mp4
     recordings_dir: str = "/data/recordings"
+
+    # GPU-accelerated encoding for Selkies sessions (VAAPI/Nvidia NVENC via
+    # baseimage-selkies's DRINODE/DRI_NODE). Off by default — needs a real
+    # encode-capable GPU passed through to the Docker host; most server CPUs
+    # (Xeon Scalable included) have no Quick Sync silicon, so check the host
+    # actually has a /dev/dri render node before flipping this on. Docker/dev
+    # only for now — the K8s path would need a device plugin instead.
+    gpu_encoding_enabled: bool = False
+    gpu_dri_node: str = "/dev/dri/renderD128"
 
     @property
     def is_dev(self) -> bool:

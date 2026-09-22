@@ -248,7 +248,7 @@ def _docker_start_sync(
     env = {
         "PUID": "1000",
         "PGID": "1000",
-        "TZ": "UTC",
+        "TZ": settings.tz,
     }
     if app_type in SELKIES_APP_TYPES:
         # linuxserver/webtop: nginx strips /session/<token>/ prefix, so serve at /
@@ -257,6 +257,19 @@ def _docker_start_sync(
             "PASSWORD": user_id[:16],
             "SUBFOLDER": "/",
         })
+    # GPU-accelerated encoding (VAAPI/NVENC) — only meaningful for Selkies
+    # sessions. Trust-the-operator flag, same convention as JUICEFS_ENABLED:
+    # we can't verify the render node exists from here — this backend runs
+    # inside its own container, so an os.path.exists() check would test OUR
+    # filesystem, not the Docker host's (same trap the DockerRootDir/
+    # disk_usage comment above the compose volumes section calls out).
+    # Real validation happens against the actual host below, when the
+    # session container is created — if the node isn't there we fall back
+    # to software encoding instead of failing the launch. DRINODE == DRI_NODE
+    # gets Selkies "zero copy" mode.
+    gpu_enabled = app_type in SELKIES_APP_TYPES and settings.gpu_encoding_enabled
+    if gpu_enabled:
+        env.update({"DRINODE": settings.gpu_dri_node, "DRI_NODE": settings.gpu_dri_node})
     # xpra (stream/web) containers need no extra env — xpra manages its own display
     env.update({str(k): str(v) for k, v in env_json.items()})
     env["LWP_SESSION_TOKEN"] = session_token
@@ -353,46 +366,72 @@ def _docker_start_sync(
     cap_add = []
     security_opt = []
     if needs_fuse:
-        devices = ["/dev/fuse:/dev/fuse:rwm"]
-        cap_add = ["SYS_ADMIN"]
+        devices.append("/dev/fuse:/dev/fuse:rwm")
+        cap_add.append("SYS_ADMIN")
         security_opt.append("apparmor:unconfined")
+    if gpu_enabled:
+        devices.append(f"{settings.gpu_dri_node}:{settings.gpu_dri_node}:rwm")
 
     # Built manually (create_host_config + create_container + api.start())
     # rather than the higher-level containers.run() for full control over
     # this combination of network/shm/devices/cap_add/security_opt/init.
     api = client.api
-    host_config = api.create_host_config(
-        network_mode=network,
-        binds=volumes or None,
-        tmpfs=tmpfs or None,
-        shm_size=shm_bytes,
-        devices=devices or None,
-        cap_add=cap_add or None,
-        security_opt=security_opt or None,
-        # Session entrypoints exec straight into ttyd/supervisord as PID 1,
-        # which never reaps orphaned children (e.g. ssh's `nc` ProxyCommand
-        # child if ssh dies first) — they pile up as zombies for the life of
-        # the container. --init attaches docker-init (tini) as a proper
-        # subreaper. Not for Selkies-based apps though — they run s6-overlay,
-        # whose suexec hard-refuses to start ("can only run as pid 1") once
-        # tini takes PID 1 and execs it as PID 2 instead.
-        init=(app_type not in SELKIES_APP_TYPES),
-    )
 
-    created = api.create_container(
-        image=container_image,
-        name=pod_name,
-        environment=env,
-        volumes=[v["bind"] for v in volumes.values()] if volumes else None,
-        labels={
-            "lwp.managed": "true",
-            "lwp.session": pod_name,
-            "lwp.user": user_id,
-            **({"lwp.vpn": "gateway"} if is_vpn_gateway else {}),
-        },
-        host_config=host_config,
-    )
-    api.start(container=created["Id"])
+    def _create_and_start(env: dict, devices: list) -> dict:
+        host_config = api.create_host_config(
+            network_mode=network,
+            binds=volumes or None,
+            tmpfs=tmpfs or None,
+            shm_size=shm_bytes,
+            devices=devices or None,
+            cap_add=cap_add or None,
+            security_opt=security_opt or None,
+            # Session entrypoints exec straight into ttyd/supervisord as PID
+            # 1, which never reaps orphaned children (e.g. ssh's `nc`
+            # ProxyCommand child if ssh dies first) — they pile up as
+            # zombies for the life of the container. --init attaches
+            # docker-init (tini) as a proper subreaper. Not for Selkies-
+            # based apps though — they run s6-overlay, whose suexec
+            # hard-refuses to start ("can only run as pid 1") once tini
+            # takes PID 1 and execs it as PID 2 instead.
+            init=(app_type not in SELKIES_APP_TYPES),
+        )
+        created = api.create_container(
+            image=container_image,
+            name=pod_name,
+            environment=env,
+            volumes=[v["bind"] for v in volumes.values()] if volumes else None,
+            labels={
+                "lwp.managed": "true",
+                "lwp.session": pod_name,
+                "lwp.user": user_id,
+                **({"lwp.vpn": "gateway"} if is_vpn_gateway else {}),
+            },
+            host_config=host_config,
+        )
+        api.start(container=created["Id"])
+        return created
+
+    try:
+        created = _create_and_start(env, devices)
+    except docker.errors.APIError:
+        if not gpu_enabled:
+            raise
+        # The render node didn't exist on THIS host after all — same
+        # trust-the-operator gap noted above. Clear the failed container
+        # (create_container already reserved pod_name) and relaunch on
+        # software encoding rather than failing the whole session.
+        log.warning(
+            "GPU device %s unavailable on this Docker host — retrying %s "
+            "with software encoding", settings.gpu_dri_node, pod_name,
+        )
+        try:
+            api.remove_container(pod_name, force=True)
+        except docker.errors.APIError:
+            pass
+        env = {k: v for k, v in env.items() if k not in ("DRINODE", "DRI_NODE")}
+        devices = [d for d in devices if not d.startswith(f"{settings.gpu_dri_node}:")]
+        created = _create_and_start(env, devices)
     if vpn_net is not None:
         vpn_net.connect(pod_name, aliases=["vpn"] if is_vpn_gateway else None)
         if is_vpn_gateway:
@@ -560,7 +599,7 @@ async def _k8s_start(
     from kubernetes_asyncio import config as k8s_config
     await k8s_config.load_incluster_config()
 
-    base = {"PUID": "1000", "PGID": "1000", "TZ": "UTC"}
+    base = {"PUID": "1000", "PGID": "1000", "TZ": settings.tz}
     if app_type in SELKIES_APP_TYPES:
         base.update({
             "CUSTOM_USER": username,

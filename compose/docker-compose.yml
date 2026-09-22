@@ -62,12 +62,17 @@ services:
       LDAP_GROUPS_ATTR: ${LDAP_GROUPS_ATTR:-memberOf}
       LWP_BASE_URL: ${LWP_BASE_URL:-http://localhost}
       LWP_ENV: development
+      TZ: ${TZ:-Europe/Amsterdam}
       DOCKER_NETWORK: ${DOCKER_NETWORK:-compose_internal}
-      # Experimental — see docs/storage-juicefs.md (local/juicefs-storage branch only)
+      # Experimental, off by default — see docs/storage-juicefs.md
       JUICEFS_ENABLED: ${JUICEFS_ENABLED:-false}
       JUICEFS_NAME: ${JUICEFS_NAME:-}
       JUICEFS_META_URL: ${JUICEFS_META_URL:-}
       JUICEFS_VOLUME_DRIVER: ${JUICEFS_VOLUME_DRIVER:-juicedata/juicefs}
+      # Off by default — needs a real encode-capable GPU on this Docker host
+      # (checked at session-launch time, not here). See services/container.py.
+      GPU_ENCODING_ENABLED: ${GPU_ENCODING_ENABLED:-false}
+      GPU_DRI_NODE: ${GPU_DRI_NODE:-/dev/dri/renderD128}
     volumes:
       - ../backend:/app
       - /var/run/docker.sock:/var/run/docker.sock
