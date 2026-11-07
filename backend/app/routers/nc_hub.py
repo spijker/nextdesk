@@ -470,28 +470,32 @@ def _passwords_headers(key: str | None = None) -> dict:
 async def passwords_status(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
     """Check if Nextcloud Passwords has a master password set.
     
-    Returns: {has_master_password: bool, key_challenge: str | null}
-    If has_master_password is true, the frontend needs to provide the encryption key
-    derived from the master password for all subsequent requests.
+    Returns: {has_master_password: bool, key_required: bool}
+    
+    The Nextcloud Passwords API will return 403 Forbidden when trying to access
+    passwords without the correct encryption key. We test this by trying to
+    fetch the password list without a key.
     """
     nc_url, nc_user, pw = await _creds(user, db)
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
-            # Try to get the settings which includes master password info
-            r = await c.get(f"{nc_url}{_PASSWORD}/settings",
+            # Try to fetch passwords without a key - if we get 403, master password is set
+            r = await c.get(f"{nc_url}{_PASSWORD}/passwords",
                           headers=_passwords_headers(),
                           auth=(nc_user, pw))
+        # If we get 200, no master password or it's already unlocked
         if r.status_code == 200:
-            data = r.json().get("ocs", {}).get("data", {})
-            has_master = data.get("has_master_password", False)
-            # If there's a master password, we need the key
-            return {
-                "has_master_password": has_master,
-                "key_challenge": data.get("key_challenge") if has_master else None
-            }
-        return {"has_master_password": False, "key_challenge": None}
-    except Exception:
-        return {"has_master_password": False, "key_challenge": None}
+            return {"has_master_password": False, "key_required": False}
+        # If we get 403, master password is required
+        elif r.status_code == 403:
+            return {"has_master_password": True, "key_required": True}
+        # Any other status - assume no master password but there might be an error
+        return {"has_master_password": False, "key_required": False}
+    except Exception as e:
+        # If we get an exception, check if it's a 403
+        if hasattr(e, 'response') and getattr(e.response, 'status_code', None) == 403:
+            return {"has_master_password": True, "key_required": True}
+        return {"has_master_password": False, "key_required": False}
 
 
 @router.get("/passwords")

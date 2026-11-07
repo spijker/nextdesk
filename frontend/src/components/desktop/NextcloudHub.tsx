@@ -545,7 +545,7 @@ function PasswordsTab({ qc }: { qc: any }) {
 
   // Check if we need to prompt for encryption key
   useEffect(() => {
-    if (status.data?.has_master_password && encryptionKey === null && !keyPrompt) {
+    if (status.data?.key_required && encryptionKey === null && !keyPrompt) {
       setKeyPrompt(true);
     }
   }, [status.data, encryptionKey, keyPrompt]);
@@ -567,7 +567,7 @@ function PasswordsTab({ qc }: { qc: any }) {
   if (passwords.isError) return <Empty text="Passwords not available (install the Passwords app in Nextcloud)." />;
   
   // Show key prompt if master password is set
-  if (keyPrompt && status.data?.has_master_password) {
+  if (keyPrompt && status.data?.key_required) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-4">
         <div className="text-center">
