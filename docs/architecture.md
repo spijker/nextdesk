@@ -32,7 +32,7 @@ Auth: external OIDC provider (Azure AD / Okta / Auth0 / Authentik / Google)
 ## Container image stack
 
 ```
-lwp-selkies-base (ghcr.io/linuxserver/baseimage-selkies:debiantrixie + rclone + LWP sidecars)
+lwp-selkies-base (ghcr.io/linuxserver/baseimage-selkies:2.2.1 + rclone + LWP sidecars)
      │  Desktop apps (app_type=kasm) — Selkies serves the WebSocket stream on :3000 (HTTP)
      ├── lwp-firefox / lwp-vivaldi / lwp-thunderbird / lwp-libreoffice
      ├── lwp-terminator / sshpilot / vscodium / headlamp / filezilla / remmina / ferdium / opencode
