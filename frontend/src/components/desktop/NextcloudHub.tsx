@@ -1,6 +1,6 @@
 import { useMemo, useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Calendar, Bell, StickyNote, X, ExternalLink, Trash2, Plus, Check, ListChecks, Trello, MessagesSquare, Send, Search, UserRound } from "lucide-react";
+import { Calendar, Bell, StickyNote, X, ExternalLink, Trash2, Plus, Check, ListChecks, Trello, MessagesSquare, Send, Search, UserRound, Key, Eye, EyeOff, Copy } from "lucide-react";
 import { toast } from "sonner";
 import client from "@/api/client";
 import { cn } from "@/lib/utils";
@@ -19,7 +19,12 @@ interface Room { token: string; name: string; unread: number; last: string; last
 interface Msg { id: number; actor: string; message: string; at: number; mine: boolean; system: boolean }
 interface Contact { id: string; label: string }
 
-type Tab = "calendar" | "notifications" | "notes" | "tasks" | "deck" | "talk";
+// Passwords types
+interface Password { id: number; label: string; username: string; url: string; folder_id: number | null; favicon: string; updated: number }
+interface PasswordFolder { id: number; label: string; color: string }
+interface PasswordDetail extends Password { password: string; notes: string; custom_fields: any[]; expire_time: string | null }
+
+type Tab = "calendar" | "notifications" | "notes" | "tasks" | "deck" | "talk" | "passwords";
 
 export function NextcloudHub({ onClose }: { onClose(): void }) {
   const qc = useQueryClient();
@@ -34,6 +39,7 @@ export function NextcloudHub({ onClose }: { onClose(): void }) {
     { id: "deck", icon: Trello },
     { id: "talk", icon: MessagesSquare },
     { id: "notes", icon: StickyNote },
+    { id: "passwords", icon: Key },
     { id: "notifications", icon: Bell, n: notif.data?.length },
   ];
 
@@ -60,6 +66,7 @@ export function NextcloudHub({ onClose }: { onClose(): void }) {
           {tab === "talk" && <TalkTab qc={qc} />}
           {tab === "notifications" && <NotificationsTab q={notif} qc={qc} />}
           {tab === "notes" && <NotesTab q={notes} qc={qc} />}
+          {tab === "passwords" && <PasswordsTab qc={qc} />}
         </div>
       </div>
     </>
@@ -503,6 +510,128 @@ function TalkTab({ qc }: { qc: any }) {
                 <button onClick={() => { if (confirm("Delete this chat?")) del.mutate(r.token); }}
                   className="rounded p-1 text-white/25 opacity-0 hover:text-red-400 group-hover:opacity-100"><Trash2 className="h-3.5 w-3.5" /></button>
               </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ── Passwords ─────────────────────────────────────────────────────────────────
+function PasswordsTab({ qc }: { qc: any }) {
+  const passwords = useQuery<Password[]>({ queryKey: ["nc-passwords"], queryFn: () => client.get("/api/nextcloud/passwords").then((r) => r.data), retry: false });
+  const folders = useQuery<PasswordFolder[]>({ queryKey: ["nc-passwords-folders"], queryFn: () => client.get("/api/nextcloud/passwords/folders").then((r) => r.data), retry: false });
+  const [selected, setSelected] = useState<PasswordDetail | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const invalidate = () => { qc.invalidateQueries({ queryKey: ["nc-passwords"] }); qc.invalidateQueries({ queryKey: ["nc-passwords-folders"] }); };
+
+  const del = useMutation({
+    mutationFn: (id: number) => client.delete(`/api/nextcloud/passwords/${id}`),
+    onSuccess: () => { setSelected(null); invalidate(); toast.success("Password deleted"); },
+    onError: () => toast.error("Delete failed"),
+  });
+
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success(`Copied ${label} to clipboard`);
+  };
+
+  if (passwords.isError) return <Empty text="Passwords not available (install the Passwords app in Nextcloud)." />;
+  
+  if (selected) {
+    return (
+      <div className="flex h-full flex-col p-2">
+        <div className="mb-2 flex items-center gap-2">
+          <button onClick={() => setSelected(null)} className="text-xs text-white/50 hover:text-white">← Back</button>
+          <div className="flex-1" />
+          <button onClick={() => { if (confirm("Delete this password?")) del.mutate(selected.id); }}
+            className="rounded p-1 text-white/40 hover:text-red-400"><Trash2 className="h-4 w-4" /></button>
+        </div>
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+          <div>
+            <label className="text-[10px] font-semibold uppercase tracking-wide text-white/40">Label</label>
+            <div className="text-sm text-white/90">{selected.label}</div>
+          </div>
+          {selected.username && (
+            <div>
+              <label className="text-[10px] font-semibold uppercase tracking-wide text-white/40">Username</label>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-white/90">{selected.username}</span>
+                <button onClick={() => copyToClipboard(selected.username, "username")} className="rounded p-1 text-white/40 hover:text-white"><Copy className="h-3.5 w-3.5" /></button>
+              </div>
+            </div>
+          )}
+          {selected.password && (
+            <div>
+              <label className="text-[10px] font-semibold uppercase tracking-wide text-white/40">Password</label>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-white/90">{showPassword ? selected.password : "••••••••"}</span>
+                <button onClick={() => setShowPassword(!showPassword)} className="rounded p-1 text-white/40 hover:text-white">
+                  {showPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                </button>
+                <button onClick={() => copyToClipboard(selected.password, "password")} className="rounded p-1 text-white/40 hover:text-white"><Copy className="h-3.5 w-3.5" /></button>
+              </div>
+            </div>
+          )}
+          {selected.url && (
+            <div>
+              <label className="text-[10px] font-semibold uppercase tracking-wide text-white/40">URL</label>
+              <div className="flex items-center gap-2">
+                <a href={selected.url} target="_blank" rel="noreferrer" className="text-sm text-indigo-400 hover:underline">{selected.url}</a>
+                <button onClick={() => copyToClipboard(selected.url, "URL")} className="rounded p-1 text-white/40 hover:text-white"><Copy className="h-3.5 w-3.5" /></button>
+              </div>
+            </div>
+          )}
+          {selected.notes && (
+            <div>
+              <label className="text-[10px] font-semibold uppercase tracking-wide text-white/40">Notes</label>
+              <div className="text-sm text-white/70 whitespace-pre-wrap">{selected.notes}</div>
+            </div>
+          )}
+          {selected.expire_time && (
+            <div>
+              <label className="text-[10px] font-semibold uppercase tracking-wide text-white/40">Expires</label>
+              <div className="text-sm text-white/70">{selected.expire_time}</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const items = passwords.data ?? [];
+  const folderMap = useMemo(() => {
+    const map = new Map<number, string>();
+    (folders.data ?? []).forEach(f => map.set(f.id, f.label));
+    return map;
+  }, [folders.data]);
+
+  return (
+    <div>
+      <div className="flex justify-end border-b border-white/10 p-2">
+        <button onClick={() => toast.info("Password generator coming soon!")} className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300">
+          <Plus className="h-3.5 w-3.5" /> New password
+        </button>
+      </div>
+      {items.length === 0 ? (
+        <Empty text="No passwords yet. Add one in Nextcloud, or install the Passwords app." />
+      ) : (
+        <ul className="space-y-0.5 p-1.5">
+          {items.map((p) => (
+            <li key={p.id}>
+              <button onClick={async () => {
+                const detail = await client.get(`/api/nextcloud/passwords/${p.id}`).then(r => r.data);
+                setSelected(detail);
+              }} className="block w-full rounded-lg px-2.5 py-2 text-left hover:bg-white/5">
+                <div className="flex items-center gap-2">
+                  {p.favicon ? <img src={p.favicon} alt="" className="h-4 w-4 rounded" /> : <Key className="h-4 w-4 text-white/40" />}
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-white/90">{p.label}</div>
+                    {p.username && <div className="truncate text-xs text-white/50">{p.username}</div>}
+                  </div>
+                </div>
+              </button>
             </li>
           ))}
         </ul>
