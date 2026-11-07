@@ -7,7 +7,7 @@ RUN apt-get update -qq && \
         git jq joe vim \
         openssh-client netcat-openbsd oathtool \
         python3-minimal python3-pip tmux \
-        fuse3 unzip && \
+        fuse3 unzip libatomic1 && \
     pip install --no-cache-dir --break-system-packages ruff yamllint && \
     ARCH=$(uname -m) && \
     curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${ARCH}" \
