@@ -38,7 +38,7 @@ Install the bundled Nextcloud custom app (`nextcloud-app/nextdesk/`), point it a
 | **Database** | PostgreSQL 16 |
 | **Cache / queue** | Redis 7 |
 | **Proxy** | Nginx — `auth_request` session routing, strips `/session/<token>/` prefix |
-| **Desktop apps** | Selkies (WebSocket mode, H.264/pixelflux) — no TURN server needed. Base `lwp-selkies-base` — `ghcr.io/linuxserver/baseimage-selkies:2.2.1` (s6-overlay, Wayland/labwc) + LWP sidecars as custom-services.d. `lwp-kasm-base` (legacy KasmVNC on :8080) is being phased out — only the VPN gateway app still builds on it. LinuxServer.io's own 200+ image catalog is also pickable straight from the admin UI (same Selkies base, no build step) |
+| **Desktop apps** | Selkies (WebSocket mode, H.264/pixelflux) — no TURN server needed. Base `lwp-selkies-base` — `ghcr.io/linuxserver/baseimage-selkies` (s6-overlay, Wayland/labwc) + LWP sidecars as custom-services.d. `lwp-kasm-base` (legacy KasmVNC on :8080) is being phased out — only the VPN gateway app still builds on it. LinuxServer.io's own 200+ image catalog is also pickable straight from the admin UI (same Selkies base, no build step) |
 | **Web-native apps** | App serves its own UI over HTTPS, proxied directly (no VNC). Base `lwp-web-base` — nginx TLS wrapper; or the app does its own TLS (code-server, ttyd) |
 | **Auth** | OIDC (SSO), local username/password, LDAP/Active Directory; single-session takeover |
 | **Storage** | rclone WebDAV (Nextcloud) with VFS full-cache mode + user SFTP/S3 mounts (key or password) |
@@ -204,7 +204,7 @@ lwp/
 │       ├── store/          desktop.ts (Zustand), auth.ts
 │       └── hooks/          useIdleTimer.ts
 ├── containers/
-│   ├── selkies-base/       Desktop app base — ghcr.io/linuxserver/baseimage-selkies:2.2.1
+│   ├── selkies-base/       Desktop app base — ghcr.io/linuxserver/baseimage-selkies
 │   │                       + LWP sidecars (NC/SFTP/S3 mounts, VPN relay, "open with…",
 │   │                       file-list API) as s6 custom-services.d
 │   ├── kasm-base/          Legacy VNC base (KasmVNC + PulseAudio + rclone) — only vpn/ builds on it now

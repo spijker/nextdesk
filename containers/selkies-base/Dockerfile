@@ -20,7 +20,7 @@
 #     (PIXELFLUX_RECORDING_SOCKET) for exactly this use case — recording
 #     needs a rewrite onto that before this image can support the
 #     record_sessions group policy; out of scope for the pilot.
-FROM ghcr.io/linuxserver/baseimage-selkies:2.2.1
+FROM ghcr.io/linuxserver/baseimage-selkies:debiantrixie
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       curl ca-certificates fuse3 unzip \
