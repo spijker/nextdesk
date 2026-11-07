@@ -458,14 +458,54 @@ async def deck_archive_card(body: dict, user: User = Depends(get_current_user), 
 _PASSWORD = "/ocs/v2.php/apps/passwords/api/1.0"
 
 
+def _passwords_headers(key: str | None = None) -> dict:
+    """Build headers for Passwords API. Optionally includes encryption key."""
+    headers = {"OCS-APIRequest": "true", "Accept": "application/json"}
+    if key:
+        headers["X-Passwords-Key"] = key
+    return headers
+
+
+@router.get("/passwords/status")
+async def passwords_status(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
+    """Check if Nextcloud Passwords has a master password set.
+    
+    Returns: {has_master_password: bool, key_challenge: str | null}
+    If has_master_password is true, the frontend needs to provide the encryption key
+    derived from the master password for all subsequent requests.
+    """
+    nc_url, nc_user, pw = await _creds(user, db)
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+            # Try to get the settings which includes master password info
+            r = await c.get(f"{nc_url}{_PASSWORD}/settings",
+                          headers=_passwords_headers(),
+                          auth=(nc_user, pw))
+        if r.status_code == 200:
+            data = r.json().get("ocs", {}).get("data", {})
+            has_master = data.get("has_master_password", False)
+            # If there's a master password, we need the key
+            return {
+                "has_master_password": has_master,
+                "key_challenge": data.get("key_challenge") if has_master else None
+            }
+        return {"has_master_password": False, "key_challenge": None}
+    except Exception:
+        return {"has_master_password": False, "key_challenge": None}
+
+
 @router.get("/passwords")
-async def passwords(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
-    """List all password entries for the user."""
+async def passwords(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session), key: str | None = None):
+    """List all password entries for the user.
+    
+    Args:
+        key: Optional encryption key (required if master password is set in Nextcloud Passwords)
+    """
     nc_url, nc_user, pw = await _creds(user, db)
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
             r = await c.get(f"{nc_url}{_PASSWORD}/passwords",
-                          headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                          headers=_passwords_headers(key),
                           auth=(nc_user, pw))
         data = r.json().get("ocs", {}).get("data", []) if r.status_code == 200 else []
     except Exception:
@@ -482,13 +522,18 @@ async def passwords(user: User = Depends(get_current_user), db: AsyncSession = D
 
 
 @router.get("/passwords/{password_id}")
-async def password_detail(password_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
-    """Get a specific password entry (decrypted by the Passwords app)."""
+async def password_detail(password_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session), key: str | None = None):
+    """Get a specific password entry (decrypted by the Passwords app).
+    
+    Args:
+        password_id: The password ID
+        key: Optional encryption key (required if master password is set in Nextcloud Passwords)
+    """
     nc_url, nc_user, pw = await _creds(user, db)
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
             r = await c.get(f"{nc_url}{_PASSWORD}/passwords/{password_id}",
-                          headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                          headers=_passwords_headers(key),
                           auth=(nc_user, pw))
         return r.json().get("ocs", {}).get("data", {}) if r.status_code == 200 else {}
     except Exception:
@@ -497,8 +542,9 @@ async def password_detail(password_id: int, user: User = Depends(get_current_use
 
 @router.post("/passwords")
 async def create_password(body: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
-    """Create a new password entry. body: {label, username, password, url, folder_id, notes, ...}"""
+    """Create a new password entry. body: {label, username, password, url, folder_id, notes, key, ...}"""
     nc_url, nc_user, pw = await _creds(user, db)
+    key = body.pop("key", None)  # Extract encryption key if provided
     payload = {
         "label": body.get("label", ""),
         "username": body.get("username", ""),
@@ -517,7 +563,7 @@ async def create_password(body: dict, user: User = Depends(get_current_user), db
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.post(f"{nc_url}{_PASSWORD}/passwords",
                          json=payload,
-                         headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                         headers=_passwords_headers(key),
                          auth=(nc_user, pw))
     if r.status_code not in (200, 201):
         raise HTTPException(502, "Create failed")
@@ -528,6 +574,7 @@ async def create_password(body: dict, user: User = Depends(get_current_user), db
 async def update_password(password_id: int, body: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
     """Update an existing password entry."""
     nc_url, nc_user, pw = await _creds(user, db)
+    key = body.pop("key", None)  # Extract encryption key if provided
     payload = {
         "label": body.get("label"),
         "username": body.get("username"),
@@ -546,7 +593,7 @@ async def update_password(password_id: int, body: dict, user: User = Depends(get
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.put(f"{nc_url}{_PASSWORD}/passwords/{password_id}",
                         json=payload,
-                        headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                        headers=_passwords_headers(key),
                         auth=(nc_user, pw))
     if r.status_code not in (200, 201):
         raise HTTPException(502, "Update failed")
@@ -554,12 +601,12 @@ async def update_password(password_id: int, body: dict, user: User = Depends(get
 
 
 @router.delete("/passwords/{password_id}")
-async def delete_password(password_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
+async def delete_password(password_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session), key: str | None = None):
     """Delete a password entry."""
     nc_url, nc_user, pw = await _creds(user, db)
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.delete(f"{nc_url}{_PASSWORD}/passwords/{password_id}",
-                           headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                           headers=_passwords_headers(key),
                            auth=(nc_user, pw))
     if r.status_code not in (200, 201, 204):
         raise HTTPException(502, "Delete failed")
@@ -567,13 +614,13 @@ async def delete_password(password_id: int, user: User = Depends(get_current_use
 
 
 @router.get("/passwords/folders")
-async def password_folders(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
+async def password_folders(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session), key: str | None = None):
     """List all password folders/tags."""
     nc_url, nc_user, pw = await _creds(user, db)
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
             r = await c.get(f"{nc_url}{_PASSWORD}/folders",
-                          headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                          headers=_passwords_headers(key),
                           auth=(nc_user, pw))
         data = r.json().get("ocs", {}).get("data", []) if r.status_code == 200 else []
     except Exception:
@@ -585,7 +632,9 @@ async def password_folders(user: User = Depends(get_current_user), db: AsyncSess
 @router.post("/passwords/generate")
 async def generate_password(body: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
     """Generate a random password using Nextcloud Passwords' generator.
-    body: {length, use_upper, use_lower, use_numbers, use_special, exclude_special_chars}"""
+    body: {length, use_upper, use_lower, use_numbers, use_special, exclude_special_chars}
+    
+    Note: Password generation doesn't require the encryption key."""
     nc_url, nc_user, pw = await _creds(user, db)
     payload = {
         "length": body.get("length", 16),
@@ -599,7 +648,7 @@ async def generate_password(body: dict, user: User = Depends(get_current_user), 
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
             r = await c.post(f"{nc_url}{_PASSWORD}/password/generate",
                             json=payload,
-                            headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                            headers=_passwords_headers(),
                             auth=(nc_user, pw))
         return r.json().get("ocs", {}).get("data", {}) if r.status_code == 200 else {}
     except Exception:
