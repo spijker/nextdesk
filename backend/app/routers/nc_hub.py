@@ -453,6 +453,159 @@ async def deck_archive_card(body: dict, user: User = Depends(get_current_user), 
     return {"ok": True}
 
 
+# ── Passwords ───────────────────────────────────────────────────────────────
+
+_PASSWORD = "/ocs/v2.php/apps/passwords/api/1.0"
+
+
+@router.get("/passwords")
+async def passwords(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
+    """List all password entries for the user."""
+    nc_url, nc_user, pw = await _creds(user, db)
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+            r = await c.get(f"{nc_url}{_PASSWORD}/passwords",
+                          headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                          auth=(nc_user, pw))
+        data = r.json().get("ocs", {}).get("data", []) if r.status_code == 200 else []
+    except Exception:
+        return []
+    return [{
+        "id": p.get("id"),
+        "label": p.get("label"),
+        "username": p.get("username"),
+        "url": p.get("url"),
+        "folder_id": p.get("folder_id"),
+        "favicon": p.get("favicon"),
+        "updated": p.get("updated"),
+    } for p in (data or [])]
+
+
+@router.get("/passwords/{password_id}")
+async def password_detail(password_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
+    """Get a specific password entry (decrypted by the Passwords app)."""
+    nc_url, nc_user, pw = await _creds(user, db)
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+            r = await c.get(f"{nc_url}{_PASSWORD}/passwords/{password_id}",
+                          headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                          auth=(nc_user, pw))
+        return r.json().get("ocs", {}).get("data", {}) if r.status_code == 200 else {}
+    except Exception:
+        return {}
+
+
+@router.post("/passwords")
+async def create_password(body: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
+    """Create a new password entry. body: {label, username, password, url, folder_id, notes, ...}"""
+    nc_url, nc_user, pw = await _creds(user, db)
+    payload = {
+        "label": body.get("label", ""),
+        "username": body.get("username", ""),
+        "password": body.get("password", ""),
+        "url": body.get("url", ""),
+        "folder_id": body.get("folder_id"),
+        "notes": body.get("notes", ""),
+        "favicon": body.get("favicon"),
+        "expire_time": body.get("expire_time"),
+        "hide_password": bool(body.get("hide_password", False)),
+        "custom_fields": body.get("custom_fields", []),
+    }
+    # Filter out None values
+    payload = {k: v for k, v in payload.items() if v is not None}
+    
+    async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+        r = await c.post(f"{nc_url}{_PASSWORD}/passwords",
+                         json=payload,
+                         headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                         auth=(nc_user, pw))
+    if r.status_code not in (200, 201):
+        raise HTTPException(502, "Create failed")
+    return r.json().get("ocs", {}).get("data", {})
+
+
+@router.put("/passwords/{password_id}")
+async def update_password(password_id: int, body: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
+    """Update an existing password entry."""
+    nc_url, nc_user, pw = await _creds(user, db)
+    payload = {
+        "label": body.get("label"),
+        "username": body.get("username"),
+        "password": body.get("password"),
+        "url": body.get("url"),
+        "folder_id": body.get("folder_id"),
+        "notes": body.get("notes"),
+        "favicon": body.get("favicon"),
+        "expire_time": body.get("expire_time"),
+        "hide_password": body.get("hide_password"),
+        "custom_fields": body.get("custom_fields"),
+    }
+    # Filter out None values
+    payload = {k: v for k, v in payload.items() if v is not None}
+    
+    async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+        r = await c.put(f"{nc_url}{_PASSWORD}/passwords/{password_id}",
+                        json=payload,
+                        headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                        auth=(nc_user, pw))
+    if r.status_code not in (200, 201):
+        raise HTTPException(502, "Update failed")
+    return r.json().get("ocs", {}).get("data", {})
+
+
+@router.delete("/passwords/{password_id}")
+async def delete_password(password_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
+    """Delete a password entry."""
+    nc_url, nc_user, pw = await _creds(user, db)
+    async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+        r = await c.delete(f"{nc_url}{_PASSWORD}/passwords/{password_id}",
+                           headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                           auth=(nc_user, pw))
+    if r.status_code not in (200, 201, 204):
+        raise HTTPException(502, "Delete failed")
+    return {"ok": True}
+
+
+@router.get("/passwords/folders")
+async def password_folders(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
+    """List all password folders/tags."""
+    nc_url, nc_user, pw = await _creds(user, db)
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+            r = await c.get(f"{nc_url}{_PASSWORD}/folders",
+                          headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                          auth=(nc_user, pw))
+        data = r.json().get("ocs", {}).get("data", []) if r.status_code == 200 else []
+    except Exception:
+        return []
+    return [{"id": f.get("id"), "label": f.get("label"), "color": f.get("color")}
+            for f in (data or [])]
+
+
+@router.post("/passwords/generate")
+async def generate_password(body: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
+    """Generate a random password using Nextcloud Passwords' generator.
+    body: {length, use_upper, use_lower, use_numbers, use_special, exclude_special_chars}"""
+    nc_url, nc_user, pw = await _creds(user, db)
+    payload = {
+        "length": body.get("length", 16),
+        "use_upper": bool(body.get("use_upper", True)),
+        "use_lower": bool(body.get("use_lower", True)),
+        "use_numbers": bool(body.get("use_numbers", True)),
+        "use_special": bool(body.get("use_special", False)),
+        "exclude_special_chars": body.get("exclude_special_chars", ""),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+            r = await c.post(f"{nc_url}{_PASSWORD}/password/generate",
+                            json=payload,
+                            headers={"OCS-APIRequest": "true", "Accept": "application/json"},
+                            auth=(nc_user, pw))
+        return r.json().get("ocs", {}).get("data", {}) if r.status_code == 200 else {}
+    except Exception:
+        return {}
+
+
 # ── Talk (chat only — not the spreed video calls) ───────────────────────────────
 
 _TALK = "/ocs/v2.php/apps/spreed/api"
