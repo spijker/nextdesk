@@ -520,41 +520,32 @@ function TalkTab({ qc }: { qc: any }) {
 
 // ── Passwords ─────────────────────────────────────────────────────────────────
 function PasswordsTab({ qc }: { qc: any }) {
-  const [encryptionKey, setEncryptionKey] = useState<string | null>(null);
-  const [keyPrompt, setKeyPrompt] = useState(false);
-  
-  const status = useQuery<{has_master_password: boolean; key_challenge: string | null}>({
+  const status = useQuery<{has_master_password: boolean; encrypted: boolean}>({
     queryKey: ["nc-passwords-status"],
     queryFn: () => client.get("/api/nextcloud/passwords/status").then((r) => r.data),
     retry: false,
   });
 
   const passwords = useQuery<Password[]>({
-    queryKey: ["nc-passwords", encryptionKey],
-    queryFn: () => client.get(`/api/nextcloud/passwords${encryptionKey ? `?key=${encodeURIComponent(encryptionKey)}` : ''}`).then((r) => r.data),
+    queryKey: ["nc-passwords"],
+    queryFn: () => client.get("/api/nextcloud/passwords").then((r) => r.data),
     retry: false,
-    enabled: encryptionKey !== null || !status.data?.has_master_password,
   });
   
   const folders = useQuery<PasswordFolder[]>({
-    queryKey: ["nc-passwords-folders", encryptionKey],
-    queryFn: () => client.get(`/api/nextcloud/passwords/folders${encryptionKey ? `?key=${encodeURIComponent(encryptionKey)}` : ''}`).then((r) => r.data),
+    queryKey: ["nc-passwords-folders"],
+    queryFn: () => client.get("/api/nextcloud/passwords/folders").then((r) => r.data),
     retry: false,
-    enabled: encryptionKey !== null || !status.data?.has_master_password,
   });
 
-  // Check if we need to prompt for encryption key
-  useEffect(() => {
-    if (status.data?.key_required && encryptionKey === null && !keyPrompt) {
-      setKeyPrompt(true);
-    }
-  }, [status.data, encryptionKey, keyPrompt]);
+  // Check if data is encrypted
+  const isEncrypted = status.data?.encrypted || status.data?.has_master_password;
   const [selected, setSelected] = useState<PasswordDetail | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["nc-passwords"] }); qc.invalidateQueries({ queryKey: ["nc-passwords-folders"] }); };
 
   const del = useMutation({
-    mutationFn: (id: number) => client.delete(`/api/nextcloud/passwords/${id}${encryptionKey ? `?key=${encodeURIComponent(encryptionKey)}` : ''}`),
+    mutationFn: (id: number) => client.delete(`/api/nextcloud/passwords/${id}`),
     onSuccess: () => { setSelected(null); invalidate(); toast.success("Password deleted"); },
     onError: () => toast.error("Delete failed"),
   });
@@ -566,47 +557,19 @@ function PasswordsTab({ qc }: { qc: any }) {
 
   if (passwords.isError) return <Empty text="Passwords not available (install the Passwords app in Nextcloud)." />;
   
-  // Show key prompt if master password is set
-  if (keyPrompt && status.data?.key_required) {
+  // Show message if data is encrypted (master password set)
+  if (isEncrypted && passwords.data && passwords.data.length > 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-4">
         <div className="text-center">
           <Key className="mx-auto h-12 w-12 text-white/40" />
           <p className="mt-4 text-sm text-white/80">Nextcloud Passwords is protected with a master password</p>
-          <p className="mt-2 text-xs text-white/50">Enter your master password to decrypt and view your passwords</p>
-          <div className="mt-6 w-full max-w-xs">
-            <input 
-              type="password" 
-              autoFocus
-              placeholder="Master password..."
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  // Derive encryption key from master password
-                  // Note: This is a simplified approach - in production you'd use the proper key derivation
-                  const masterPassword = (e.target as HTMLInputElement).value;
-                  if (masterPassword) {
-                    // For Nextcloud Passwords, the key is typically the SHA256 hash of the master password
-                    // But the actual implementation depends on the Passwords app version
-                    setEncryptionKey(masterPassword);
-                    setKeyPrompt(false);
-                  }
-                }
-              }}
-              className="w-full rounded bg-black/40 px-3 py-2 text-sm text-white/90 outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-            <button 
-              onClick={() => {
-                const input = document.querySelector('input[type="password"]') as HTMLInputElement;
-                if (input?.value) {
-                  setEncryptionKey(input.value);
-                  setKeyPrompt(false);
-                }
-              }}
-              className="mt-3 w-full rounded bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-            >
-              Unlock
-            </button>
-          </div>
+          <p className="mt-2 text-xs text-white/50 max-w-xs">
+            Your passwords are encrypted. To view them, please use the Nextcloud Passwords web interface or browser extension.
+          </p>
+          <p className="mt-4 text-xs text-white/40">
+            {passwords.data.length} encrypted password(s) found
+          </p>
         </div>
       </div>
     );
@@ -694,7 +657,7 @@ function PasswordsTab({ qc }: { qc: any }) {
           {items.map((p) => (
             <li key={p.id}>
               <button onClick={async () => {
-                const detail = await client.get(`/api/nextcloud/passwords/${p.id}${encryptionKey ? `?key=${encodeURIComponent(encryptionKey)}` : ''}`).then(r => r.data);
+                const detail = await client.get(`/api/nextcloud/passwords/${p.id}`).then(r => r.data);
                 setSelected(detail);
               }} className="block w-full rounded-lg px-2.5 py-2 text-left hover:bg-white/5">
                 <div className="flex items-center gap-2">

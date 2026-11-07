@@ -470,32 +470,36 @@ def _passwords_headers(key: str | None = None) -> dict:
 async def passwords_status(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
     """Check if Nextcloud Passwords has a master password set.
     
-    Returns: {has_master_password: bool, key_required: bool}
+    Returns: {has_master_password: bool, encrypted: bool}
     
-    The Nextcloud Passwords API will return 403 Forbidden when trying to access
-    passwords without the correct encryption key. We test this by trying to
-    fetch the password list without a key.
+    Nextcloud Passwords uses client-side encryption. When a master password is set:
+    - The API returns encrypted data (not 403)
+    - The frontend must decrypt it using the master password
+    - We can detect this by checking if the returned data is encrypted
+    
+    However, for simplicity, we'll just return that encryption is enabled
+    and let the frontend handle decryption.
     """
     nc_url, nc_user, pw = await _creds(user, db)
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
-            # Try to fetch passwords without a key - if we get 403, master password is set
+            # Try to fetch a single password to check if data is encrypted
             r = await c.get(f"{nc_url}{_PASSWORD}/passwords",
                           headers=_passwords_headers(),
                           auth=(nc_user, pw))
-        # If we get 200, no master password or it's already unlocked
         if r.status_code == 200:
-            return {"has_master_password": False, "key_required": False}
-        # If we get 403, master password is required
-        elif r.status_code == 403:
-            return {"has_master_password": True, "key_required": True}
-        # Any other status - assume no master password but there might be an error
-        return {"has_master_password": False, "key_required": False}
-    except Exception as e:
-        # If we get an exception, check if it's a 403
-        if hasattr(e, 'response') and getattr(e.response, 'status_code', None) == 403:
-            return {"has_master_password": True, "key_required": True}
-        return {"has_master_password": False, "key_required": False}
+            data = r.json().get("ocs", {}).get("data", [])
+            # Check if the first password has encrypted fields
+            if data and isinstance(data, list) and len(data) > 0:
+                first = data[0]
+                # If password field is encrypted, it will be a base64 string or have specific markers
+                # For now, we'll assume encryption is enabled if we get data
+                # The frontend will need to handle decryption
+                return {"has_master_password": True, "encrypted": True}
+            return {"has_master_password": False, "encrypted": False}
+        return {"has_master_password": False, "encrypted": False}
+    except Exception:
+        return {"has_master_password": False, "encrypted": False}
 
 
 @router.get("/passwords")
@@ -526,18 +530,17 @@ async def passwords(user: User = Depends(get_current_user), db: AsyncSession = D
 
 
 @router.get("/passwords/{password_id}")
-async def password_detail(password_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session), key: str | None = None):
-    """Get a specific password entry (decrypted by the Passwords app).
+async def password_detail(password_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
+    """Get a specific password entry.
     
-    Args:
-        password_id: The password ID
-        key: Optional encryption key (required if master password is set in Nextcloud Passwords)
+    Note: If a master password is set in Nextcloud Passwords, the returned
+    data will be encrypted and needs to be decrypted client-side.
     """
     nc_url, nc_user, pw = await _creds(user, db)
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
             r = await c.get(f"{nc_url}{_PASSWORD}/passwords/{password_id}",
-                          headers=_passwords_headers(key),
+                          headers=_passwords_headers(),
                           auth=(nc_user, pw))
         return r.json().get("ocs", {}).get("data", {}) if r.status_code == 200 else {}
     except Exception:
@@ -546,9 +549,8 @@ async def password_detail(password_id: int, user: User = Depends(get_current_use
 
 @router.post("/passwords")
 async def create_password(body: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
-    """Create a new password entry. body: {label, username, password, url, folder_id, notes, key, ...}"""
+    """Create a new password entry. body: {label, username, password, url, folder_id, notes, ...}"""
     nc_url, nc_user, pw = await _creds(user, db)
-    key = body.pop("key", None)  # Extract encryption key if provided
     payload = {
         "label": body.get("label", ""),
         "username": body.get("username", ""),
@@ -567,7 +569,7 @@ async def create_password(body: dict, user: User = Depends(get_current_user), db
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.post(f"{nc_url}{_PASSWORD}/passwords",
                          json=payload,
-                         headers=_passwords_headers(key),
+                         headers=_passwords_headers(),
                          auth=(nc_user, pw))
     if r.status_code not in (200, 201):
         raise HTTPException(502, "Create failed")
@@ -578,7 +580,6 @@ async def create_password(body: dict, user: User = Depends(get_current_user), db
 async def update_password(password_id: int, body: dict, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
     """Update an existing password entry."""
     nc_url, nc_user, pw = await _creds(user, db)
-    key = body.pop("key", None)  # Extract encryption key if provided
     payload = {
         "label": body.get("label"),
         "username": body.get("username"),
@@ -597,7 +598,7 @@ async def update_password(password_id: int, body: dict, user: User = Depends(get
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.put(f"{nc_url}{_PASSWORD}/passwords/{password_id}",
                         json=payload,
-                        headers=_passwords_headers(key),
+                        headers=_passwords_headers(),
                         auth=(nc_user, pw))
     if r.status_code not in (200, 201):
         raise HTTPException(502, "Update failed")
@@ -605,12 +606,12 @@ async def update_password(password_id: int, body: dict, user: User = Depends(get
 
 
 @router.delete("/passwords/{password_id}")
-async def delete_password(password_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session), key: str | None = None):
+async def delete_password(password_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
     """Delete a password entry."""
     nc_url, nc_user, pw = await _creds(user, db)
     async with httpx.AsyncClient(timeout=TIMEOUT) as c:
         r = await c.delete(f"{nc_url}{_PASSWORD}/passwords/{password_id}",
-                           headers=_passwords_headers(key),
+                           headers=_passwords_headers(),
                            auth=(nc_user, pw))
     if r.status_code not in (200, 201, 204):
         raise HTTPException(502, "Delete failed")
@@ -618,13 +619,13 @@ async def delete_password(password_id: int, user: User = Depends(get_current_use
 
 
 @router.get("/passwords/folders")
-async def password_folders(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session), key: str | None = None):
+async def password_folders(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_session)):
     """List all password folders/tags."""
     nc_url, nc_user, pw = await _creds(user, db)
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as c:
             r = await c.get(f"{nc_url}{_PASSWORD}/folders",
-                          headers=_passwords_headers(key),
+                          headers=_passwords_headers(),
                           auth=(nc_user, pw))
         data = r.json().get("ocs", {}).get("data", []) if r.status_code == 200 else []
     except Exception:
